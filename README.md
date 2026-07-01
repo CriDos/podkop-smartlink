@@ -1,6 +1,6 @@
 # podkop-smartlink v1.0.0
 
-> Companion для [Podkop](https://github.com/itdoginfo/podkop): импорт VPN-подписок и sticky health-checked выбор сервера для selector-группы sing-box.
+> Автоматический выбор лучшего VPN-сервера для [Podkop](https://github.com/itdoginfo/podkop) (sing-box) на OpenWrt с импортом подписок, sticky-выбором и непрерывной проверкой через туннель.
 
 ![Podkop SmartLink](assets/scr1.png)
 
