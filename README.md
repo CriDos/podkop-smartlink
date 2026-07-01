@@ -1,6 +1,6 @@
 # podkop-smartlink v1.0.0
 
-> Автоматический выбор лучшего VPN-сервера для [Podkop](https://github.com/itdoginfo/podkop) (sing-box) на OpenWrt с импортом подписок, sticky-выбором и непрерывной проверкой через туннель.
+> Автоматический выбор лучшего VPN-сервера для [Podkop](https://github.com/itdoginfo/podkop) (sing-box) на OpenWrt с поддержкой подписок, sticky-выбором и непрерывной проверкой через туннель.
 
 ![Podkop SmartLink](assets/scr1.png)
 
