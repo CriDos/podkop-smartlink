@@ -1,0 +1,14 @@
+{
+  "admin/services/podkop-smartlink": {
+    "title": "Podkop SmartLink",
+    "order": 43,
+    "action": {
+      "type": "view",
+      "path": "podkop/smartlink"
+    },
+    "depends": {
+      "acl": [ "luci-app-podkop-smartlink" ],
+      "uci": { "podkop-smartlink": true }
+    }
+  }
+}

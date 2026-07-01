@@ -1,0 +1,28 @@
+# Build artifacts
+/bin/
+/build/
+deploy/
+*.ipk
+*.apk
+
+# Temp / runtime
+*.tmp
+*.log
+*.pid
+
+# Editor / OS
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
+
+# Dev
+dev/
+AGENTS.md
+
+# OpenWrt build leftovers
+.tmp/
+dl/

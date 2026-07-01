@@ -1,0 +1,436 @@
+#!/bin/sh
+
+SL_LIB="/usr/lib/podkop-smartlink"
+
+# Source all libraries (order matters: constants -> utils -> ... -> daemon)
+. /lib/functions.sh
+. /lib/config/uci.sh
+. "$SL_LIB/constants.sh"
+. "$SL_LIB/logging.sh"
+. "$SL_LIB/utils.sh"
+. "$SL_LIB/config.sh"
+. "$SL_LIB/subscription.sh"
+. "$SL_LIB/clash_api.sh"
+. "$SL_LIB/history.sh"
+. "$SL_LIB/status.sh"
+. "$SL_LIB/selector.sh"
+. "$SL_LIB/daemon.sh"
+
+# Resolve links file (full or work fallback).
+_links_file() {
+    [ -s "$STATE_LINKS_FULL" ] && echo "$STATE_LINKS_FULL" && return
+    [ -s "${STATE_DIR}/links.work" ] && echo "${STATE_DIR}/links.work" && return
+    echo ""
+}
+
+# Re-source libraries for background subshells
+_sl_source_libs() {
+    . "$SL_LIB/constants.sh"
+    . "$SL_LIB/logging.sh"
+    . "$SL_LIB/config.sh"
+    . "$SL_LIB/utils.sh"
+    . "$SL_LIB/subscription.sh"
+    . "$SL_LIB/clash_api.sh"
+    . "$SL_LIB/history.sh"
+    . "$SL_LIB/status.sh"
+    . "$SL_LIB/selector.sh"
+}
+
+# Safety: clear refreshing sentinel after 120s even if background dies.
+# Only removes if the PID inside matches the background subshell.
+_refresh_safety_timeout() {
+    local ref_pid=$$
+    ( sleep 120
+      local cur_pid
+      cur_pid="$(cat "${STATE_DIR}/refreshing" 2>/dev/null)"
+      if [ "$cur_pid" = "$ref_pid" ]; then
+        rm -f "${STATE_DIR}/refreshing" 2>/dev/null
+        rm -rf "${STATE_DIR}/sync.lock" 2>/dev/null
+      fi
+    ) </dev/null >/dev/null 2>&1 &
+}
+
+# --- get_status ---
+cmd_get_status() {
+    sl_cfg_load
+    mkdir -p "$STATE_DIR" "$STATE_HISTORY_DIR"
+    local group_tag lf
+    group_tag="$(sl_clash_group_tag "$SL_CFG_TARGET_SECTION")"
+    lf="$(_links_file)"
+    if [ -n "$lf" ]; then
+        sl_status_build "$lf" "$group_tag" ""
+    else
+        local refreshing="false"
+        [ -f "${STATE_DIR}/refreshing" ] && refreshing="true"
+        jq -c -n \
+            --arg target "$SL_CFG_TARGET_SECTION" --argjson refreshing "$refreshing" \
+            '{mode:"auto",target_section:$target,group_tag:null,
+              current:null,proxies:[],now:0,next_update:0,last_update:0,
+              refreshing:$refreshing}'
+    fi
+}
+
+# --- ping_all ---
+cmd_ping_all() {
+    sl_cfg_load
+    mkdir -p "$STATE_DIR" "$STATE_HISTORY_DIR"
+    local group_tag lf
+    group_tag="$(sl_clash_group_tag "$SL_CFG_TARGET_SECTION")"
+    lf="$(_links_file)"
+    [ -n "$lf" ] || { echo '{"error":"no_links"}'; return 1; }
+    sl_clash_wait_ready || { echo '{"error":"clash_api_unavailable"}'; return 1; }
+
+    local ping_file="${STATE_DIR}/ping.cli"
+    sl_clash_ping_group "$group_tag" "$ping_file" "$SL_CFG_PING_TIMEOUT" \
+        || { echo '{"error":"group_unavailable"}'; rm -f "$ping_file"; return 1; }
+    cp "$ping_file" "${STATE_LAST_PING}.tmp" 2>/dev/null && mv "${STATE_LAST_PING}.tmp" "$STATE_LAST_PING"
+
+    local map_file="${ping_file}.map"
+    sl_sel_build_map "$group_tag" "$lf" "$map_file"
+    sl_hist_record_pings "$ping_file" "$map_file"
+
+    sl_status_build "$lf" "$group_tag" "$ping_file"
+    rm -f "$ping_file" "$map_file"
+}
+
+# --- get_sources ---
+cmd_get_sources() {
+    local sources
+    sources="$(sl_source_list)"
+    [ -z "$sources" ] && { echo '{"sources":[]}'; return; }
+
+    local line last_up cr h
+    cr="$(printf '\r')"
+    {
+        while IFS= read -r line; do
+            line="${line%$cr}"
+            [ -z "$line" ] && continue
+            h="$(sl_sub_hash "$line")"
+            last_up="$(sl_sub_get_time "$h")"
+            printf '%s\t%s\n' "$line" "${last_up:-0}"
+        done <<EOF
+$sources
+EOF
+    } | jq -R -s 'split("\n") | map(select(length > 0)) |
+        map(split("\t") | {url: .[0], last_update: (.[1] | tonumber)}) | {sources: .}'
+}
+
+# --- save_sources (JSON arg with url list) ---
+# Smart: only clears sub caches for indices where URL changed.
+# Returns {"saved":true,"changed":N} where N = number of changed sources.
+cmd_save_sources() {
+    local input="$1"
+    [ -z "$input" ] && input="$(cat)"
+
+    # Read old sources before modifying
+    local old_sources
+    old_sources="$(sl_source_list)"
+
+    uci -q delete "$SL_NAME.main.source" 2>/dev/null
+
+    local urls count
+    urls="$(printf '%s' "$input" | jq -r '.[].url' 2>/dev/null)"
+    count="$(printf '%s\n' "$urls" | grep -c . 2>/dev/null || echo 0)"
+    local v
+    while IFS= read -r v; do
+        [ -n "$v" ] && uci -q add_list "$SL_NAME.main.source=$v" 2>/dev/null
+    done <<EOF
+$urls
+EOF
+    uci -q commit "$SL_NAME" 2>/dev/null
+
+    # Compare old vs new URL sets
+    local new_arr changed=0 changed_hashes=""
+    new_arr="$(sl_source_list)"
+
+    # Symmetric diff: URLs in new but not old (added) OR old but not new (removed)
+    local diff_urls
+    diff_urls="$(printf '%s\n%s\n' "$new_arr" "$old_sources" | sort | uniq -u)"
+
+    # For added URLs: include their hash (need fetch)
+    # For removed URLs: just count as changed (triggers rebuild, no fetch needed)
+    local u h
+    while IFS= read -r u; do
+        [ -z "$u" ] && continue
+        changed=$((changed + 1))
+        # Only add hash for URLs still in new set (added, not removed)
+        case "$(printf '%s\n' "$new_arr")" in
+            *"$u"*)
+                h="$(sl_sub_hash "$u")"
+                changed_hashes="${changed_hashes}${h},"
+                ;;
+        esac
+    done <<EOF
+$diff_urls
+EOF
+
+    # Cleanup stale caches: remove sub_<hash> files not matching any current URL
+    local valid_hashes=""
+    while IFS= read -r u; do
+        [ -z "$u" ] && continue
+        valid_hashes="${valid_hashes}$(sl_sub_hash "$u") "
+    done <<EOF
+$new_arr
+EOF
+    local cf
+    for cf in "${STATE_SUB_CACHE}"/sub_*; do
+        [ -f "$cf" ] || continue
+        local base="${cf##*/sub_}"
+        case " $valid_hashes " in
+            *" $base "*) ;;
+            *) rm -f "$cf" 2>/dev/null ;;
+        esac
+    done
+
+    # Cleanup stale source_times
+    if [ -s "$STATE_SOURCE_TIMES" ] && [ -n "$valid_hashes" ]; then
+        local times_tmp="${STATE_SOURCE_TIMES}.tmp"
+        : > "$times_tmp"
+        local tk
+        while IFS= read -r line; do
+            [ -z "$line" ] && continue
+            tk="$(printf '%s' "$line" | cut -f1)"
+            case " $valid_hashes " in
+                *" $tk "*) printf '%s\t%s\n' "$tk" "$(printf '%s' "$line" | cut -f2-)" >> "$times_tmp" ;;
+            esac
+        done < "$STATE_SOURCE_TIMES"
+        mv "$times_tmp" "$STATE_SOURCE_TIMES" 2>/dev/null
+    fi
+
+    if [ "$changed" -gt 0 ]; then
+        rm -f "$STATE_LINKS_CACHE" 2>/dev/null
+    fi
+
+    # Build JSON array of changed hashes (strings)
+    local hash_json="[]"
+    [ -n "$changed_hashes" ] && hash_json="$(printf '%s' "$changed_hashes" | tr ',' '\n' | grep -v '^$' | jq -R -s 'split("\n") | map(select(length > 0))')"
+
+    printf '{"saved":true,"changed":%d,"changed_hashes":%s}' "$changed" "$hash_json"
+}
+
+# --- ping_source <source_idx> ---
+cmd_ping_source() {
+    local src_idx="$1"
+    sl_cfg_load
+    mkdir -p "$STATE_DIR" "$STATE_HISTORY_DIR"
+    [ -z "$src_idx" ] && { echo '{"error":"source_idx_required"}'; return 1; }
+    local group_tag lf
+    group_tag="$(sl_clash_group_tag "$SL_CFG_TARGET_SECTION")"
+    lf="$(_links_file)"
+    [ -n "$lf" ] || { echo '{"error":"no_links"}'; return 1; }
+    sl_clash_wait_ready || { echo '{"error":"clash_api_unavailable"}'; return 1; }
+
+    sl_sel_ping_source "$group_tag" "$lf" "$src_idx" \
+        || { echo '{"error":"group_unavailable"}'; return 1; }
+
+    sl_status_build "$lf" "$group_tag" ""
+}
+
+# --- apply_changes <changed_hashes> (fire-and-forget, uses caches) ---
+cmd_apply_changes() {
+    local changed="$1"
+    mkdir -p "$STATE_DIR" "$STATE_HISTORY_DIR"
+    if [ -f "${STATE_DIR}/refreshing" ]; then
+        echo '{"refreshing":true}'
+        return 0
+    fi
+    local bg_pid=$$
+    printf '%s' "$bg_pid" > "${STATE_DIR}/refreshing"
+    (
+        _sl_source_libs
+        config_load "$SL_NAME"
+        sl_cfg_load
+        sl_sel_sync "${STATE_DIR}/links.work" "$changed"
+        sl_clash_wait_ready 2>/dev/null
+        [ -s "$STATE_LINKS_FULL" ] && sl_sel_display_ping "$(sl_clash_group_tag "$SL_CFG_TARGET_SECTION")" "$STATE_LINKS_FULL"
+        rm -f "${STATE_DIR}/refreshing"
+    ) </dev/null >/dev/null 2>&1 &
+    _refresh_safety_timeout
+    echo '{"refreshing":true}'
+    return 0
+}
+
+# --- reset_source_stats <source_idx> ---
+# Instant: just deletes history files, no Clash API calls or status rebuild.
+# The UI updates optimistically; next get_status will reflect cleared stats.
+cmd_reset_source_stats() {
+    local src_idx="$1"
+    mkdir -p "$STATE_DIR" "$STATE_HISTORY_DIR"
+    [ -z "$src_idx" ] && { echo '{"error":"source_idx_required"}'; return 1; }
+    local lf
+    lf="$(_links_file)"
+    [ -n "$lf" ] || { echo '{"reset":true}'; return 0; }
+
+    # Delete history files for this source's URLs only (fast, no network)
+    local url s_idx key
+    while IFS= read -r line; do
+        [ -z "$line" ] && continue
+        url="$(printf '%s' "$line" | cut -f1)"
+        s_idx="$(printf '%s' "$line" | cut -f4)"
+        [ -z "$url" ] && continue
+        [ "$s_idx" != "$src_idx" ] && continue
+        key="$(sl_hist_key "$url")"
+        rm -f "$STATE_HISTORY_DIR/$key"
+    done < "$lf"
+
+    echo '{"reset":true}'
+}
+
+# --- select_proxy <tag> ---
+cmd_select_proxy() {
+    local tag="$1"
+    sl_cfg_load
+    mkdir -p "$STATE_DIR" "$STATE_HISTORY_DIR"
+    [ -z "$tag" ] && { echo '{"error":"tag_required"}'; return 1; }
+    local group_tag lf
+    group_tag="$(sl_clash_group_tag "$SL_CFG_TARGET_SECTION")"
+    lf="$(_links_file)"
+    [ -n "$lf" ] || { echo '{"error":"no_links"}'; return 1; }
+
+    if sl_sel_select "$group_tag" "$lf" "$tag"; then
+        cmd_get_status
+    else
+        echo '{"error":"select_failed"}'; return 1
+    fi
+}
+
+# --- refresh_now (fire-and-forget: starts background, returns immediately) ---
+cmd_refresh_now() {
+    mkdir -p "$STATE_DIR" "$STATE_HISTORY_DIR"
+    if [ -f "${STATE_DIR}/refreshing" ]; then
+        echo '{"refreshing":true}'
+        return 0
+    fi
+    local bg_pid=$$
+    printf '%s' "$bg_pid" > "${STATE_DIR}/refreshing"
+    (
+        _sl_source_libs
+        config_load "$SL_NAME"
+        sl_cfg_load
+        sl_sel_sync "${STATE_DIR}/links.work"
+        sl_clash_wait_ready 2>/dev/null
+        [ -s "$STATE_LINKS_FULL" ] && sl_sel_display_ping "$(sl_clash_group_tag "$SL_CFG_TARGET_SECTION")" "$STATE_LINKS_FULL"
+        rm -f "${STATE_DIR}/refreshing"
+    ) </dev/null >/dev/null 2>&1 &
+    _refresh_safety_timeout
+    echo '{"refreshing":true}'
+    return 0
+}
+
+# --- reset_stats ---
+cmd_reset_stats() {
+    mkdir -p "$STATE_DIR" "$STATE_HISTORY_DIR"
+    sl_hist_reset_all
+    echo '{"reset":true}'
+}
+
+# --- save_config ---
+cmd_save_config() {
+    uci -q commit "$SL_NAME" 2>/dev/null
+    /etc/init.d/podkop-smartlink restart >/dev/null 2>&1 || true
+    echo '{"saved":true}'
+}
+
+# --- daemon ---
+cmd_daemon() {
+    SL_DAEMON=1
+    sl_cfg_load
+    echo $$ > "$STATE_PID"
+    sl_daemon_run
+}
+
+cmd_stop() {
+    local pid
+    pid="$(cat "$STATE_PID" 2>/dev/null)"
+    if [ -n "$pid" ]; then
+        kill "$pid" 2>/dev/null
+        # Wait up to 5s for clean shutdown (trap cleanup runs on SIGTERM)
+        local waited=0
+        while [ "$waited" -lt 10 ] && kill -0 "$pid" 2>/dev/null; do
+            sleep 1
+            waited=$((waited + 1))
+        done
+    fi
+    rm -f "$STATE_PID"
+    echo "stopped"
+}
+
+cmd_reload() {
+    /etc/init.d/podkop-smartlink restart >/dev/null 2>&1 || true
+    echo "reloaded"
+}
+
+cmd_show_config() { uci -q show "$SL_NAME" 2>/dev/null; }
+cmd_show_version() { echo "${SL_VERSION:-unknown}"; }
+
+# --- get_info (system info for About section) ---
+cmd_get_info() {
+    local sl_ver podkop_ver owrt_ver sb_ver uptime_str arch kernel loadavg mem_total mem_free
+    sl_ver="${SL_VERSION:-unknown}"
+    podkop_ver="$("$PODKOP_BIN" show_version 2>/dev/null | head -1 || echo "unknown")"
+    [ -z "$podkop_ver" ] && podkop_ver="unknown"
+    owrt_ver="$(. /etc/openwrt_release 2>/dev/null && echo "${DISTRIB_RELEASE:-unknown}")"
+    sb_ver="$("$PODKOP_BIN" show_sing_box_version 2>/dev/null | head -1 || echo "unknown")"
+    [ -z "$sb_ver" ] && sb_ver="$(sing-box version 2>/dev/null | head -1 || echo "unknown")"
+    uptime_str="$(uptime 2>/dev/null | sed 's/.*\(up.*\)/\1/; s/,* *load.*//' || echo "unknown")"
+    arch="$(. /etc/openwrt_release 2>/dev/null && echo "${DISTRIB_ARCH:-unknown}")"
+    kernel="$(uname -r 2>/dev/null || echo "unknown")"
+    loadavg="$(cat /proc/loadavg 2>/dev/null | awk '{print $1", "$2", "$3}' || echo "—")"
+    mem_total="$(grep MemTotal /proc/meminfo 2>/dev/null | awk '{print $2}' || echo 0)"
+    mem_free="$(grep MemFree /proc/meminfo 2>/dev/null | awk '{print $2}' || echo 0)"
+
+    jq -c -n \
+        --arg sl "$sl_ver" --arg pk "$podkop_ver" \
+        --arg ow "$owrt_ver" --arg sb "$sb_ver" \
+        --arg up "$uptime_str" --arg ar "$arch" \
+        --arg kr "$kernel" --arg la "$loadavg" \
+        --argjson mt "$mem_total" --argjson mf "$mem_free" \
+        '{smartlink:$sl, podkop:$pk, openwrt:$ow, singbox:$sb, uptime:$up,
+          arch:$ar, kernel:$kr, loadavg:$la, mem_total:$mt, mem_free:$mf}'
+}
+
+show_help() {
+    cat << EOF
+Usage: $0 COMMAND
+
+Commands:
+    daemon              Run the health-check daemon loop (foreground)
+    stop                Stop the running daemon
+    reload              Reload service (restart init)
+    get_status          Print status.json (dashboard snapshot)
+    ping_all            Ping all outbounds and print updated status
+    select_proxy <tag>  Manually select an outbound by tag
+    get_sources         List configured sources (JSON)
+    save_sources <json>  Save sources from JSON argument
+    ping_source <idx>   Ping servers of one source
+    reset_source_stats <idx>  Reset stats for one source
+    reset_stats         Reset all stability history + ping cache
+    refresh_now         Force subscription refresh + apply if changed
+    save_config         Commit UCI + restart/cleanup
+    show_config         Show current UCI configuration
+    show_version        Show version
+    get_info            Show system info (JSON)
+EOF
+}
+
+case "$1" in
+daemon)               cmd_daemon ;;
+stop)                 cmd_stop ;;
+reload)               cmd_reload ;;
+get_status)           cmd_get_status ;;
+ping_all)             cmd_ping_all ;;
+select_proxy)         cmd_select_proxy "$2" ;;
+get_sources)          cmd_get_sources ;;
+save_sources)         cmd_save_sources "$2" ;;
+apply_changes)        cmd_apply_changes "$2" ;;
+ping_source)          cmd_ping_source "$2" ;;
+reset_source_stats)   cmd_reset_source_stats "$2" ;;
+refresh_now)          cmd_refresh_now ;;
+reset_stats)          cmd_reset_stats ;;
+save_config)          cmd_save_config ;;
+show_config)          cmd_show_config ;;
+show_version)         cmd_show_version ;;
+get_info)             cmd_get_info ;;
+""|-h|--help|help)    show_help ;;
+*) echo "Unknown command: $1" >&2; show_help >&2; exit 1 ;;
+esac
