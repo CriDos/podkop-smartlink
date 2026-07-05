@@ -18,6 +18,10 @@ start_service() {
     procd_close_instance
 }
 
+service_triggers() {
+    procd_add_reload_trigger "$NAME"
+}
+
 stop_service() {
     /usr/bin/podkop-smartlink stop >/dev/null 2>&1
 }

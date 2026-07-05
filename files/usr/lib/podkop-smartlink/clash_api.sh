@@ -110,14 +110,15 @@ sl_clash_proxy_latency() {
     local curl_max=$(( timeout / 1000 + 5 ))
     [ "$curl_max" -lt 10 ] && curl_max=10
 
-    local resp code delay
+    local resp code delay enc_tag
+    enc_tag="$(sl_uri_encode "$tag")"
     if [ -n "$_CLASH_AUTH" ]; then
-        resp="$(curl -s -w "\n%{http_code}" --max-time "$curl_max" -G "http://${_CLASH_BASE}/proxies/${tag}/delay" \
+        resp="$(curl -s -w "\n%{http_code}" --max-time "$curl_max" -G "http://${_CLASH_BASE}/proxies/${enc_tag}/delay" \
             --header "$_CLASH_AUTH" \
             --data-urlencode "url=${SL_CFG_TEST_URL:-$DEFAULT_TEST_URL}" \
             --data-urlencode "timeout=${timeout}" 2>/dev/null)"
     else
-        resp="$(curl -s -w "\n%{http_code}" --max-time "$curl_max" -G "http://${_CLASH_BASE}/proxies/${tag}/delay" \
+        resp="$(curl -s -w "\n%{http_code}" --max-time "$curl_max" -G "http://${_CLASH_BASE}/proxies/${enc_tag}/delay" \
             --data-urlencode "url=${SL_CFG_TEST_URL:-$DEFAULT_TEST_URL}" \
             --data-urlencode "timeout=${timeout}" 2>/dev/null)"
     fi
@@ -135,10 +136,11 @@ sl_clash_set_group() {
     local group_tag="$1" proxy_tag="$2"
     sl_clash_detect
 
-    local body
+    local body enc_group
+    enc_group="$(sl_uri_encode "$group_tag")"
     body="$(jq -c -n --arg name "$proxy_tag" '{name:$name}')"
     local code
-    code="$(_sl_clash_curl PUT "/proxies/${group_tag}" "$body" | tail -n1)"
+    code="$(_sl_clash_curl PUT "/proxies/${enc_group}" "$body" | tail -n1)"
 
     case "$code" in
         204|200) log "Switched group '$group_tag' -> '$proxy_tag'" "info"; return 0 ;;
@@ -149,47 +151,45 @@ sl_clash_set_group() {
 }
 
 # Write sorted alive+dead results from tmp_dir to out_file.
-# Args: <out_file> <tmp_dir> <tag1> <tag2> ...
+# Args: <out_file> <tmp_dir> <tags_file>
 # Sets: SL_ALIVE_COUNT
 _sl_clash_ping_collect() {
-    local out_file="$1" tmp_dir="$2"
-    shift 2
+    local out_file="$1" tmp_dir="$2" tags_file="$3"
     SL_ALIVE_COUNT=0
     local alive_file="${out_file}.alive" dead_file="${out_file}.dead"
     : > "$alive_file"; : > "$dead_file"
 
-    local tag lat
-    for tag in "$@"; do
-        if [ -s "$tmp_dir/${tag}.lat" ]; then
-            read -r lat < "$tmp_dir/${tag}.lat"
+    local tag lat key
+    while IFS= read -r tag || [ -n "$tag" ]; do
+        [ -z "$tag" ] && continue
+        key="$(sl_text_key "$tag")"
+        if [ -s "$tmp_dir/${key}.lat" ]; then
+            read -r lat < "$tmp_dir/${key}.lat"
             printf '%s\t%s\n' "$lat" "$tag" >> "$alive_file"
             SL_ALIVE_COUNT=$((SL_ALIVE_COUNT + 1))
         else
             printf '\t%s\n' "$tag" >> "$dead_file"
         fi
-    done
+    done < "$tags_file"
 
     sort -t "$TAB" -k1,1n "$alive_file" > "$out_file"
     cat "$dead_file" >> "$out_file"
     rm -f "$alive_file" "$dead_file"
 }
 
-# Ping a list of tags in parallel (batched to avoid NAT bottleneck).
+# Ping a newline-delimited list of tags in parallel (batched to avoid NAT bottleneck).
 # Writes sorted results to out_file.
-# Args: <out_file> <timeout_ms> <tag1> <tag2> ...
+# Args: <out_file> <timeout_ms> <tags_file>
 # File format: "<latency_or_empty>\t<tag>" per line (alive sorted by latency, dead after).
 # Sets: SL_ALIVE_COUNT
 SL_PING_BATCH=10
 
-sl_clash_ping_tags() {
-    local out_file="$1" timeout="$2"
-    shift 2
-    [ -z "$1" ] && { SL_ALIVE_COUNT=0; : > "$out_file"; return 1; }
+sl_clash_ping_tags_file() {
+    local out_file="$1" timeout="$2" tags_file="$3"
+    [ -s "$tags_file" ] || { SL_ALIVE_COUNT=0; : > "$out_file"; return 1; }
 
     sl_clash_detect
     local test_url="${SL_CFG_TEST_URL:-$DEFAULT_TEST_URL}"
-    local auth=""
-    [ -n "$_CLASH_AUTH" ] && auth="$_CLASH_AUTH"
 
     local curl_max=$(( timeout / 1000 + 5 ))
     [ "$curl_max" -lt 10 ] && curl_max=10
@@ -197,19 +197,28 @@ sl_clash_ping_tags() {
     local tmp_dir="${out_file}.pids"
     rm -rf "$tmp_dir"; mkdir -p "$tmp_dir"
 
-    local tag batch_count=0
-    for tag in "$@"; do
+    local tag batch_count=0 key enc_tag
+    while IFS= read -r tag || [ -n "$tag" ]; do
+        [ -z "$tag" ] && continue
+        key="$(sl_text_key "$tag")"
+        enc_tag="$(sl_uri_encode "$tag")"
         (
             local resp code delay
-            resp="$(curl -s -w "\n%{http_code}" --max-time "$curl_max" -G "http://${_CLASH_BASE}/proxies/${tag}/delay" \
-                ${auth:+--header "$auth"} \
-                --data-urlencode "url=${test_url}" \
-                --data-urlencode "timeout=${timeout}" 2>/dev/null)"
+            if [ -n "$_CLASH_AUTH" ]; then
+                resp="$(curl -s -w "\n%{http_code}" --max-time "$curl_max" -G "http://${_CLASH_BASE}/proxies/${enc_tag}/delay" \
+                    --header "$_CLASH_AUTH" \
+                    --data-urlencode "url=${test_url}" \
+                    --data-urlencode "timeout=${timeout}" 2>/dev/null)"
+            else
+                resp="$(curl -s -w "\n%{http_code}" --max-time "$curl_max" -G "http://${_CLASH_BASE}/proxies/${enc_tag}/delay" \
+                    --data-urlencode "url=${test_url}" \
+                    --data-urlencode "timeout=${timeout}" 2>/dev/null)"
+            fi
             code="$(printf '%s' "$resp" | tail -n1)"
             if [ "$code" = "200" ]; then
                 delay="$(printf '%s' "$resp" | sed '$d' | jq -r '.delay // empty' 2>/dev/null)"
                 if [ -n "$delay" ] && [ "$delay" != "null" ]; then
-                    printf '%s' "$delay" > "$tmp_dir/${tag}.lat"
+                    printf '%s' "$delay" > "$tmp_dir/${key}.lat"
                 fi
             fi
         ) &
@@ -218,13 +227,27 @@ sl_clash_ping_tags() {
             wait
             batch_count=0
         fi
-    done
+    done < "$tags_file"
 
     wait
 
-    _sl_clash_ping_collect "$out_file" "$tmp_dir" "$@"
+    _sl_clash_ping_collect "$out_file" "$tmp_dir" "$tags_file"
     rm -rf "$tmp_dir"
     return 0
+}
+
+sl_clash_ping_tags() {
+    local out_file="$1" timeout="$2" tags_file="${out_file}.tags.$$"
+    shift 2
+    : > "$tags_file"
+    local tag
+    for tag in "$@"; do
+        [ -n "$tag" ] && printf '%s\n' "$tag" >> "$tags_file"
+    done
+    sl_clash_ping_tags_file "$out_file" "$timeout" "$tags_file"
+    local rc=$?
+    rm -f "$tags_file"
+    return $rc
 }
 
 # Ping all outbounds in a group.
@@ -234,27 +257,31 @@ sl_clash_ping_group() {
     local group_tag="$1" out_file="$2" timeout="${3:-$DEFAULT_PING_TIMEOUT}" sequential="${4:-0}"
     : > "$out_file"
 
-    local tags
-    tags="$(sl_clash_get_outbound_tags "$group_tag")"
-    [ -z "$tags" ] && { SL_ALIVE_COUNT=0; return 1; }
+    local tags_file="${out_file}.tags.$$"
+    sl_clash_get_outbound_tags "$group_tag" > "$tags_file" 2>/dev/null
+    [ -s "$tags_file" ] || { SL_ALIVE_COUNT=0; rm -f "$tags_file"; return 1; }
 
     if [ "$sequential" = "1" ]; then
         local tmp_dir="${out_file}.seq"
         rm -rf "$tmp_dir"; mkdir -p "$tmp_dir"
-        local tag lat
-        for tag in $tags; do
+        local tag lat key
+        while IFS= read -r tag || [ -n "$tag" ]; do
+            [ -z "$tag" ] && continue
+            key="$(sl_text_key "$tag")"
             lat="$(sl_clash_proxy_latency "$tag" "$timeout")"
             if [ -n "$lat" ]; then
-                printf '%s' "$lat" > "$tmp_dir/${tag}.lat"
+                printf '%s' "$lat" > "$tmp_dir/${key}.lat"
             fi
-        done
-        # shellcheck disable=SC2086
-        _sl_clash_ping_collect "$out_file" "$tmp_dir" $tags
+        done < "$tags_file"
+        _sl_clash_ping_collect "$out_file" "$tmp_dir" "$tags_file"
         rm -rf "$tmp_dir"
+        rm -f "$tags_file"
         return 0
     fi
 
     # Parallel mode
-    # shellcheck disable=SC2086
-    sl_clash_ping_tags "$out_file" "$timeout" $tags
+    sl_clash_ping_tags_file "$out_file" "$timeout" "$tags_file"
+    local rc=$?
+    rm -f "$tags_file"
+    return $rc
 }

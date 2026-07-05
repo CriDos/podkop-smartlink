@@ -3,10 +3,7 @@
     "description": "Grant UBI and RPC access to LuCI app podkop-smartlink",
     "read": {
       "file": {
-        "/usr/bin/podkop-smartlink": [
-          "exec"
-        ],
-        "/etc/init.d/podkop-smartlink": [
+        "/usr/bin/podkop-smartlink-read": [
           "exec"
         ]
       },
@@ -16,14 +13,17 @@
         ]
       },
       "uci": [
-        "podkop-smartlink",
-        "podkop"
+        "podkop-smartlink"
       ]
     },
     "write": {
+      "file": {
+        "/usr/bin/podkop-smartlink-write": [
+          "exec"
+        ]
+      },
       "uci": [
-        "podkop-smartlink",
-        "podkop"
+        "podkop-smartlink"
       ]
     }
   }

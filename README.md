@@ -1,6 +1,6 @@
-# podkop-smartlink v1.0.0
+# podkop-smartlink v1.1.0
 
-> Автоматический выбор лучшего VPN-сервера для [Podkop](https://github.com/itdoginfo/podkop) (sing-box) на OpenWrt с поддержкой подписок, sticky-выбором и непрерывной проверкой через туннель.
+> Следит за VPN-подписками, проверяет сервера и держит [Podkop](https://github.com/itdoginfo/podkop) на рабочем подключении. При проблемах автоматически выбирает здоровую замену.
 
 ![Podkop SmartLink](assets/scr1.png)
 
@@ -9,19 +9,27 @@
 Установленный Podkop:
 
 ```sh
-sh <(wget -O - https://raw.githubusercontent.com/itdoginfo/podkop/refs/heads/main/install.sh)
+wget -O - https://raw.githubusercontent.com/itdoginfo/podkop/refs/heads/main/install.sh | sh
 ```
 
 ## Установка / Обновление
 
+Стабильная версия:
+
 ```sh
-sh <(wget -O - https://raw.githubusercontent.com/CriDos/podkop-smartlink/refs/heads/main/_install.sh)
+wget -O - https://raw.githubusercontent.com/CriDos/podkop-smartlink/refs/heads/main/_install.sh | sh
+```
+
+Dev-версия 1.1.0:
+
+```sh
+wget -O - https://raw.githubusercontent.com/CriDos/podkop-smartlink/refs/heads/dev/1.1.0/_install.sh | SMARTLINK_REPO=https://raw.githubusercontent.com/CriDos/podkop-smartlink/refs/heads/dev/1.1.0 sh
 ```
 
 ## Удаление
 
 ```sh
-sh <(wget -O - https://raw.githubusercontent.com/CriDos/podkop-smartlink/refs/heads/main/_uninstall.sh)
+wget -O - https://raw.githubusercontent.com/CriDos/podkop-smartlink/refs/heads/main/_uninstall.sh | sh
 ```
 
 Конфиг сохраняется. Полное удаление: `rm -f /etc/config/podkop-smartlink`
@@ -29,8 +37,9 @@ sh <(wget -O - https://raw.githubusercontent.com/CriDos/podkop-smartlink/refs/he
 ## Возможности
 
 - Подписки и прямые ссылки (`vless://`, `ss://`, `trojan://`) в одном списке
+- Исключение серверов в каждой подписке по простым вхождениям
 - Sticky-выбор — текущий сервер не меняется, пока пинг в норме
-- Автопереключение после N ошибок подряд (score-based с приоритетом источников)
+- Автопереключение после N проблем подряд на здоровый сервер
 - Статистика: доступность и стабильность по каждому серверу
 - LuCI-интерфейс с drag-and-drop приоритета, ручным выбором сервера, i18n
 - Проверка доступности через VPN-туннель до настраиваемого адреса
@@ -38,6 +47,28 @@ sh <(wget -O - https://raw.githubusercontent.com/CriDos/podkop-smartlink/refs/he
 ## Настройка
 
 LuCI: **Services → Podkop SmartLink**
+
+### Настройки
+
+- **Обновление подписок** — как часто скачивать подписки и обновлять список серверов.
+- **Расширенные транспорты** — показывает XHTTP и другие новые типы подключений, если sing-box их поддерживает.
+- **Учитывать порядок подписок** — при автозамене выбирать из подписок выше по списку.
+- **Проверка сервера** — интервал проверки текущего сервера, максимальный пинг и количество проблем подряд до замены.
+- **Проверка серверов** — фоновая проверка всех серверов, таймаут ответа и URL для проверки.
+
+Временные и числовые параметры в LuCI выбираются из фиксированных списков.
+
+### Подписки
+
+В разделе **Подписки** можно задать фильтр **Исключать сервера** для конкретной подписки.
+Формат простой: `Россия; Finland; gRPC; example.com`.
+
+Правила:
+
+- разделитель — точка с запятой;
+- пробелы по краям значений игнорируются;
+- совпадение ищется в названии сервера, хосте и полной ссылке;
+- исключённые серверы видны в SmartLink как отключённые, но не передаются в Podkop.
 
 ## CLI
 
@@ -58,5 +89,5 @@ podkop-smartlink show_version        # версия
 sing-box с расширенными протоколами (xhttp и др.):
 
 ```sh
-sh <(wget -O - https://raw.githubusercontent.com/EikeiDev/OpenWRT-sing-box-extended/refs/heads/main/install.sh)
+wget -O - https://raw.githubusercontent.com/EikeiDev/OpenWRT-sing-box-extended/refs/heads/main/install.sh | sh
 ```

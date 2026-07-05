@@ -16,13 +16,16 @@ sl_hist_append() {
 
     # Atomic append via mkdir lock (prevents interleaving with concurrent writers)
     local lock_dir="${STATE_HISTORY_DIR}/.lock_${key}"
-    local locked=0
-    if mkdir "$lock_dir" 2>/dev/null; then
-        locked=1
-    else
-        # Lock contention — just append without lock (low risk for small writes)
-        :
-    fi
+    local waited=0
+    while ! mkdir "$lock_dir" 2>/dev/null; do
+        if [ "$(( $(date +%s) - $(sl_safe_num "$(sl_file_mtime "$lock_dir")") ))" -gt 30 ]; then
+            rm -rf "$lock_dir" 2>/dev/null
+            continue
+        fi
+        [ "$waited" -ge 5 ] && return 1
+        sleep 1
+        waited=$((waited + 1))
+    done
 
     printf '%s\t%s\t%s\n' "$ts" "$lat" "$ok" >> "$hfile"
 
@@ -30,10 +33,11 @@ sl_hist_append() {
     local lines
     lines="$(wc -l < "$hfile" 2>/dev/null || echo 0)"
     if [ "$lines" -gt "$HISTORY_MAX_SAMPLES" ]; then
-        tail -n "$HISTORY_MAX_SAMPLES" "$hfile" > "${hfile}.tmp" && mv "${hfile}.tmp" "$hfile"
+        local tmp="${hfile}.$$"
+        tail -n "$HISTORY_MAX_SAMPLES" "$hfile" > "$tmp" && mv "$tmp" "$hfile"
     fi
 
-    [ "$locked" = "1" ] && rmdir "$lock_dir" 2>/dev/null
+    rmdir "$lock_dir" 2>/dev/null
 }
 
 # Precompute stats for all history files in a single awk pass.
@@ -70,13 +74,16 @@ sl_hist_precompute_all() {
                 t = total[key]; o = ok[key] + 0; nn = n[key] + 0; s = sum[key] + 0
                 if (t <= 0) { printf "%s\t0\t0\t0\n", key; continue }
                 avail = o / t
-                if (nn < 2) { stab = 0 } else {
+                if (nn <= 0) { stab = 0 } else {
                     mean = s / nn
-                    sq = 0
-                    for (i = 1; i <= nn; i++) { d = vals[key, i] - mean; sq += d * d }
-                    cv = sqrt(sq / nn) / (mean > 0 ? mean : 1)
-                    if (cv > 1) cv = 1
-                    stab = 1 - cv
+                    absdev = 0
+                    for (i = 1; i <= nn; i++) {
+                        d = vals[key, i] - mean
+                        absdev += (d < 0 ? -d : d)
+                    }
+                    jitter = (absdev / nn) / (mean > 0 ? mean : 1)
+                    if (jitter > 1) jitter = 1
+                    stab = 1 - (jitter * 0.75)
                 }
                 printf "%s\t%.2f\t%.2f\t%d\n", key, avail, stab, t
             }

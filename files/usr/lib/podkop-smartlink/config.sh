@@ -31,12 +31,13 @@ sl_cfg_int() {
 # Convert an interval string (Ns/Nm/Nh/Nd) to seconds.
 sl_interval_to_sec() {
     local v="$1"
+    local n
     [ -z "$v" ] && echo 3600 && return
     case "$v" in
-        *s) echo "${v%s}" ;;
-        *m) echo "$(( ${v%m} * 60 ))" ;;
-        *h) echo "$(( ${v%h} * 3600 ))" ;;
-        *d) echo "$(( ${v%d} * 86400 ))" ;;
+        *s) n="${v%s}"; case "$n" in ''|*[!0-9]*) echo 3600 ;; *) echo "$n" ;; esac ;;
+        *m) n="${v%m}"; case "$n" in ''|*[!0-9]*) echo 3600 ;; *) echo "$(( n * 60 ))" ;; esac ;;
+        *h) n="${v%h}"; case "$n" in ''|*[!0-9]*) echo 3600 ;; *) echo "$(( n * 3600 ))" ;; esac ;;
+        *d) n="${v%d}"; case "$n" in ''|*[!0-9]*) echo 3600 ;; *) echo "$(( n * 86400 ))" ;; esac ;;
         *[!0-9]*) echo 3600 ;;
         *) echo "$v" ;;
     esac

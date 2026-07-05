@@ -18,6 +18,7 @@ SL_LIB="/usr/lib/podkop-smartlink"
 
 # Resolve links file (full or work fallback).
 _links_file() {
+    [ -z "$(sl_source_list)" ] && echo "" && return
     [ -s "$STATE_LINKS_FULL" ] && echo "$STATE_LINKS_FULL" && return
     [ -s "${STATE_DIR}/links.work" ] && echo "${STATE_DIR}/links.work" && return
     echo ""
@@ -36,18 +37,104 @@ _sl_source_libs() {
     . "$SL_LIB/selector.sh"
 }
 
-# Safety: clear refreshing sentinel after 120s even if background dies.
-# Only removes if the PID inside matches the background subshell.
+# Safety: clear refresh lock if the recorded background owner dies.
+# Only removes if the owner token still matches this refresh/apply run.
 _refresh_safety_timeout() {
-    local ref_pid=$$
-    ( sleep 120
-      local cur_pid
-      cur_pid="$(cat "${STATE_DIR}/refreshing" 2>/dev/null)"
-      if [ "$cur_pid" = "$ref_pid" ]; then
-        rm -f "${STATE_DIR}/refreshing" 2>/dev/null
-        rm -rf "${STATE_DIR}/sync.lock" 2>/dev/null
-      fi
+    local ref_id="$1"
+    ( sleep 180
+      sl_lock_owner_alive "$STATE_REFRESH_LOCK" "$ref_id" || sl_refresh_finish "$ref_id"
     ) </dev/null >/dev/null 2>&1 &
+}
+
+_sync_result_set() {
+    local sync_rc="$1" ok_message="$2" fetch_failed_message="$3"
+    case "$sync_rc" in
+        0) sl_refresh_result_set true "ok" "$ok_message" ;;
+        1) sl_refresh_result_set false "fetch_failed" "$fetch_failed_message" ;;
+        2) sl_refresh_result_set false "apply_failed" "Podkop apply failed or sync locked" ;;
+        *) sl_refresh_result_set false "unknown" "Unknown refresh result" ;;
+    esac
+}
+
+_cmd_clear_no_sources_state() {
+    sl_cfg_load
+    sl_sel_release_podkop "$SL_CFG_TARGET_SECTION" >/dev/null 2>&1 || return 1
+    rm -f "$STATE_LINKS_CACHE" "$STATE_LINKS_FULL" "$STATE_LINKS_EXCLUDED" "$STATE_TAGS_CACHE" \
+        "$STATE_LAST_PING" "${STATE_DIR}/links.work" "${STATE_DIR}/links.work.excluded" 2>/dev/null
+    sl_cur_clear
+    return 0
+}
+
+_cmd_start_sync_job() {
+    local changed="$1" ok_message="$2" fetch_failed_message="$3"
+
+    mkdir -p "$STATE_DIR" "$STATE_HISTORY_DIR"
+    if sl_refresh_active; then
+        echo '{"refreshing":true}'
+        return 0
+    fi
+
+    if [ -z "$(sl_source_list)" ]; then
+        if _cmd_clear_no_sources_state; then
+            sl_refresh_result_set true "ok" "$ok_message"
+            echo '{"refreshing":false}'
+            return 0
+        fi
+        sl_refresh_result_set false "apply_failed" "Podkop release failed"
+        echo '{"refreshing":false}'
+        return 1
+    fi
+
+    local ref_id
+    ref_id="$(sl_refresh_start)" || { echo '{"refreshing":true}'; return 0; }
+    (
+        _sl_source_libs
+        _sync_job_cleanup() {
+            sl_refresh_finish "$ref_id"
+        }
+        trap '_sync_job_cleanup; exit 1' INT TERM
+
+        config_load "$SL_NAME"
+        sl_cfg_load
+
+        local sync_rc work shell_pid lock_pid tries group_tag
+        shell_pid="$$"
+        tries=0
+        while :; do
+            lock_pid="$(cat "$STATE_REFRESH_LOCK/pid" 2>/dev/null)"
+            [ -n "$lock_pid" ] && [ "$lock_pid" != "$shell_pid" ] && break
+            [ "$tries" -ge 5 ] && break
+            tries=$((tries + 1))
+            sleep 1
+        done
+        SL_LOCK_OWNER_PID="${lock_pid:-$shell_pid}"
+        work="${STATE_DIR}/links.work"
+        if [ -n "$changed" ]; then
+            sl_sel_sync "$work" "$changed"
+        else
+            sl_sel_sync "$work"
+        fi
+        sync_rc=$?
+
+        if [ "$sync_rc" -eq 0 ] && [ -s "$STATE_LINKS_FULL" ]; then
+            sl_clash_wait_ready 2>/dev/null
+            group_tag="$(sl_clash_group_tag "$SL_CFG_TARGET_SECTION")"
+            if sl_sel_current_valid "$STATE_LINKS_FULL" "$group_tag"; then
+                sl_sel_display_ping "$group_tag" "$STATE_LINKS_FULL"
+            else
+                sl_sel_ping_all "$group_tag" "$STATE_LINKS_FULL" || true
+            fi
+        fi
+
+        _sync_result_set "$sync_rc" "$ok_message" "$fetch_failed_message"
+        _sync_job_cleanup
+    ) </dev/null >/dev/null 2>&1 &
+    local job_pid="$!"
+    sl_lock_set_pid "$STATE_REFRESH_LOCK" "$ref_id" "$job_pid"
+
+    _refresh_safety_timeout "$ref_id"
+    echo '{"refreshing":true}'
+    return 0
 }
 
 # --- get_status ---
@@ -59,14 +146,17 @@ cmd_get_status() {
     lf="$(_links_file)"
     if [ -n "$lf" ]; then
         sl_status_build "$lf" "$group_tag" ""
+    elif [ -s "$STATE_LINKS_EXCLUDED" ]; then
+        sl_status_build "/dev/null" "$group_tag" ""
     else
         local refreshing="false"
-        [ -f "${STATE_DIR}/refreshing" ] && refreshing="true"
+        sl_refresh_active && refreshing="true"
         jq -c -n \
             --arg target "$SL_CFG_TARGET_SECTION" --argjson refreshing "$refreshing" \
+            --argjson refresh_result "$(sl_refresh_result_get)" \
             '{mode:"auto",target_section:$target,group_tag:null,
               current:null,proxies:[],now:0,next_update:0,last_update:0,
-              refreshing:$refreshing}'
+              refreshing:$refreshing,refresh_result:$refresh_result}'
     fi
 }
 
@@ -80,10 +170,10 @@ cmd_ping_all() {
     [ -n "$lf" ] || { echo '{"error":"no_links"}'; return 1; }
     sl_clash_wait_ready || { echo '{"error":"clash_api_unavailable"}'; return 1; }
 
-    local ping_file="${STATE_DIR}/ping.cli"
+    local ping_file="${STATE_DIR}/ping.cli.$$"
     sl_clash_ping_group "$group_tag" "$ping_file" "$SL_CFG_PING_TIMEOUT" \
         || { echo '{"error":"group_unavailable"}'; rm -f "$ping_file"; return 1; }
-    cp "$ping_file" "${STATE_LAST_PING}.tmp" 2>/dev/null && mv "${STATE_LAST_PING}.tmp" "$STATE_LAST_PING"
+    cp "$ping_file" "${STATE_LAST_PING}.$$" 2>/dev/null && mv "${STATE_LAST_PING}.$$" "$STATE_LAST_PING"
 
     local map_file="${ping_file}.map"
     sl_sel_build_map "$group_tag" "$lf" "$map_file"
@@ -99,7 +189,7 @@ cmd_get_sources() {
     sources="$(sl_source_list)"
     [ -z "$sources" ] && { echo '{"sources":[]}'; return; }
 
-    local line last_up cr h
+    local line last_up cr h exclude
     cr="$(printf '\r')"
     {
         while IFS= read -r line; do
@@ -107,12 +197,152 @@ cmd_get_sources() {
             [ -z "$line" ] && continue
             h="$(sl_sub_hash "$line")"
             last_up="$(sl_sub_get_time "$h")"
-            printf '%s\t%s\n' "$line" "${last_up:-0}"
+            exclude="$(sl_filter_normalize "$(uci -q get "$SL_NAME.main.exclude_${h}" 2>/dev/null)")"
+            printf '%s\t%s\t%s\n' "$line" "${last_up:-0}" "$exclude"
         done <<EOF
 $sources
 EOF
     } | jq -R -s 'split("\n") | map(select(length > 0)) |
-        map(split("\t") | {url: .[0], last_update: (.[1] | tonumber)}) | {sources: .}'
+        map(split("\t") | {url: .[0], last_update: (.[1] | tonumber), exclude: (.[2] // "")}) | {sources: .}'
+}
+
+_sources_records_from_json() {
+    local input="$1" records_file="$2"
+
+    if ! printf '%s' "$input" | jq -e 'type=="array" and all(.[]; has("url") and (.url|type=="string") and ((has("exclude")|not) or (.exclude|type=="string")))' >/dev/null 2>&1; then
+        return 1
+    fi
+
+    : > "$records_file"
+    printf '%s' "$input" | jq -r '.[] | [.url, (.exclude // "")] | @tsv' 2>/dev/null | while IFS="$TAB" read -r v raw_exclude; do
+        printf '%s\t%s\n' "$v" "$(sl_filter_normalize "$raw_exclude")" >> "$records_file"
+    done
+
+    local urls v vl
+    urls="$(cut -f1 "$records_file" 2>/dev/null)"
+    [ -n "$urls" ] || return 0
+    while IFS= read -r v; do
+        case "$v" in
+            ''|*[[:space:]]*) return 2 ;;
+        esac
+        vl="$(printf '%s' "$v" | tr 'A-Z' 'a-z')"
+        case "$vl" in
+            http://*|https://*) ;;
+            -*) return 2 ;;
+            *) sl_sub_is_supported "$v" || return 2 ;;
+        esac
+    done <<EOF
+$urls
+EOF
+}
+
+_sources_old_records() {
+    local old_sources="$1" old_records_file="$2" v old_h
+    : > "$old_records_file"
+    while IFS= read -r v; do
+        [ -n "$v" ] || continue
+        old_h="$(sl_sub_hash "$v")"
+        printf '%s\t%s\n' "$v" "$(sl_filter_normalize "$(uci -q get "$SL_NAME.main.exclude_${old_h}" 2>/dev/null)")" >> "$old_records_file"
+    done <<EOF
+$old_sources
+EOF
+}
+
+_sources_write_uci() {
+    local records_file="$1"
+    local batch_file="${STATE_DIR}/sources_uci.$$"
+    uci -q delete "$SL_NAME.main.source" 2>/dev/null || true
+    {
+        uci -q show "$SL_NAME.main" 2>/dev/null | sed -n "s/^${SL_NAME}\.main\.\(exclude_[^=]*\)=.*/delete ${SL_NAME}.main.\1/p"
+        while IFS="$TAB" read -r v raw_exclude; do
+            [ -n "$v" ] || continue
+            local esc_v
+            esc_v="$(printf '%s' "$v" | sed "s/'/'\\\\''/g")"
+            printf "add_list %s.main.source='%s'\n" "$SL_NAME" "$esc_v"
+        done < "$records_file"
+        while IFS="$TAB" read -r v raw_exclude; do
+            [ -n "$v" ] || continue
+            [ -n "$raw_exclude" ] || continue
+            local filter_h esc_filter
+            filter_h="$(sl_sub_hash "$v")"
+            esc_filter="$(printf '%s' "$raw_exclude" | sed "s/'/'\\\\''/g")"
+            printf "set %s.main.exclude_%s='%s'\n" "$SL_NAME" "$filter_h" "$esc_filter"
+        done < "$records_file"
+        printf "commit %s\n" "$SL_NAME"
+    } > "$batch_file"
+
+    uci -q batch < "$batch_file" 2>/dev/null
+    local rc=$?
+    rm -f "$batch_file"
+    return $rc
+}
+
+_sources_calc_changes() {
+    local records_file="$1" old_records_file="$2" old_sources="$3"
+    local new_arr changed=0 changed_hashes="" diff_urls u h new_filter old_filter
+
+    new_arr="$(cut -f1 "$records_file" 2>/dev/null)"
+    diff_urls="$(printf '%s\n%s\n' "$new_arr" "$old_sources" | sort | uniq -u)"
+
+    while IFS= read -r u; do
+        [ -z "$u" ] && continue
+        changed=$((changed + 1))
+        if printf '%s\n' "$new_arr" | sl_line_in_list "$u"; then
+            h="$(sl_sub_hash "$u")"
+            changed_hashes="${changed_hashes}${h},"
+        fi
+    done <<EOF
+$diff_urls
+EOF
+
+    while IFS="$TAB" read -r u new_filter; do
+        [ -n "$u" ] || continue
+        if printf '%s\n' "$old_sources" | sl_line_in_list "$u"; then
+            old_filter="$(awk -F "$TAB" -v u="$u" '$1==u{print $2; exit}' "$old_records_file" 2>/dev/null)"
+            [ "$old_filter" != "$new_filter" ] && changed=$((changed + 1))
+        fi
+    done < "$records_file"
+
+    if [ "$changed" -eq 0 ] && [ "$old_sources" != "$new_arr" ]; then
+        changed=1
+    fi
+
+    printf '%s\t%s\n' "$changed" "$changed_hashes"
+}
+
+_sources_valid_hashes() {
+    local records_file="$1" u valid_hashes=""
+    while IFS= read -r u; do
+        [ -z "$u" ] && continue
+        valid_hashes="${valid_hashes}$(sl_sub_hash "$u") "
+    done <<EOF
+$(cut -f1 "$records_file" 2>/dev/null)
+EOF
+    printf '%s' "$valid_hashes"
+}
+
+_sources_cleanup_stale_state() {
+    local valid_hashes="$1" line tk cf base
+    for cf in "${STATE_SUB_CACHE}"/sub_*; do
+        [ -f "$cf" ] || continue
+        base="${cf##*/sub_}"
+        case " $valid_hashes " in
+            *" $base "*) ;;
+            *) rm -f "$cf" 2>/dev/null ;;
+        esac
+    done
+
+    [ -s "$STATE_SOURCE_TIMES" ] || return 0
+    local times_tmp="${STATE_SOURCE_TIMES}.$$"
+    : > "$times_tmp"
+    while IFS= read -r line; do
+        [ -z "$line" ] && continue
+        tk="$(printf '%s' "$line" | cut -f1)"
+        case " $valid_hashes " in
+            *" $tk "*) printf '%s\t%s\n' "$tk" "$(printf '%s' "$line" | cut -f2-)" >> "$times_tmp" ;;
+        esac
+    done < "$STATE_SOURCE_TIMES"
+    mv "$times_tmp" "$STATE_SOURCE_TIMES" 2>/dev/null
 }
 
 # --- save_sources (JSON arg with url list) ---
@@ -122,89 +352,57 @@ cmd_save_sources() {
     local input="$1"
     [ -z "$input" ] && input="$(cat)"
 
+    mkdir -p "$STATE_DIR" "$STATE_SUB_CACHE"
+
+    local records_file="${STATE_DIR}/sources_new.$$"
+    _sources_records_from_json "$input" "$records_file"
+    case $? in
+        0) ;;
+        2) rm -f "$records_file"; echo '{"error":"invalid_url"}'; return 1 ;;
+        *) rm -f "$records_file"; echo '{"error":"invalid_sources"}'; return 1 ;;
+    esac
+
+    local lock_token
+    lock_token="$(sl_lock_acquire "$STATE_SYNC_LOCK" 10)" || {
+        rm -f "$records_file"
+        echo '{"error":"busy"}'
+        return 1
+    }
+
     # Read old sources before modifying
-    local old_sources
+    local old_sources old_records_file
     old_sources="$(sl_source_list)"
+    old_records_file="${STATE_DIR}/sources_old.$$"
+    _sources_old_records "$old_sources" "$old_records_file"
 
-    uci -q delete "$SL_NAME.main.source" 2>/dev/null
-
-    local urls count
-    urls="$(printf '%s' "$input" | jq -r '.[].url' 2>/dev/null)"
-    count="$(printf '%s\n' "$urls" | grep -c . 2>/dev/null || echo 0)"
-    local v
-    while IFS= read -r v; do
-        [ -n "$v" ] && uci -q add_list "$SL_NAME.main.source=$v" 2>/dev/null
-    done <<EOF
-$urls
-EOF
-    uci -q commit "$SL_NAME" 2>/dev/null
-
-    # Compare old vs new URL sets
-    local new_arr changed=0 changed_hashes=""
-    new_arr="$(sl_source_list)"
-
-    # Symmetric diff: URLs in new but not old (added) OR old but not new (removed)
-    local diff_urls
-    diff_urls="$(printf '%s\n%s\n' "$new_arr" "$old_sources" | sort | uniq -u)"
-
-    # For added URLs: include their hash (need fetch)
-    # For removed URLs: just count as changed (triggers rebuild, no fetch needed)
-    local u h
-    while IFS= read -r u; do
-        [ -z "$u" ] && continue
-        changed=$((changed + 1))
-        # Only add hash for URLs still in new set (added, not removed)
-        case "$(printf '%s\n' "$new_arr")" in
-            *"$u"*)
-                h="$(sl_sub_hash "$u")"
-                changed_hashes="${changed_hashes}${h},"
-                ;;
-        esac
-    done <<EOF
-$diff_urls
-EOF
-
-    # Cleanup stale caches: remove sub_<hash> files not matching any current URL
-    local valid_hashes=""
-    while IFS= read -r u; do
-        [ -z "$u" ] && continue
-        valid_hashes="${valid_hashes}$(sl_sub_hash "$u") "
-    done <<EOF
-$new_arr
-EOF
-    local cf
-    for cf in "${STATE_SUB_CACHE}"/sub_*; do
-        [ -f "$cf" ] || continue
-        local base="${cf##*/sub_}"
-        case " $valid_hashes " in
-            *" $base "*) ;;
-            *) rm -f "$cf" 2>/dev/null ;;
-        esac
-    done
-
-    # Cleanup stale source_times
-    if [ -s "$STATE_SOURCE_TIMES" ] && [ -n "$valid_hashes" ]; then
-        local times_tmp="${STATE_SOURCE_TIMES}.tmp"
-        : > "$times_tmp"
-        local tk
-        while IFS= read -r line; do
-            [ -z "$line" ] && continue
-            tk="$(printf '%s' "$line" | cut -f1)"
-            case " $valid_hashes " in
-                *" $tk "*) printf '%s\t%s\n' "$tk" "$(printf '%s' "$line" | cut -f2-)" >> "$times_tmp" ;;
-            esac
-        done < "$STATE_SOURCE_TIMES"
-        mv "$times_tmp" "$STATE_SOURCE_TIMES" 2>/dev/null
+    if ! _sources_write_uci "$records_file"; then
+        uci -q revert "$SL_NAME" 2>/dev/null || true
+        sl_lock_release "$STATE_SYNC_LOCK" "$lock_token"
+        rm -f "$records_file" "$old_records_file"
+        echo '{"error":"uci_failed"}'
+        return 1
     fi
+    local new_arr change_info changed changed_hashes
+    new_arr="$(cut -f1 "$records_file" 2>/dev/null)"
+    change_info="$(_sources_calc_changes "$records_file" "$old_records_file" "$old_sources")"
+    changed="$(printf '%s' "$change_info" | cut -f1)"
+    changed_hashes="$(printf '%s' "$change_info" | cut -f2)"
+
+    _sources_cleanup_stale_state "$(_sources_valid_hashes "$records_file")"
 
     if [ "$changed" -gt 0 ]; then
         rm -f "$STATE_LINKS_CACHE" 2>/dev/null
+    fi
+    if [ -z "$new_arr" ]; then
+        _cmd_clear_no_sources_state || true
     fi
 
     # Build JSON array of changed hashes (strings)
     local hash_json="[]"
     [ -n "$changed_hashes" ] && hash_json="$(printf '%s' "$changed_hashes" | tr ',' '\n' | grep -v '^$' | jq -R -s 'split("\n") | map(select(length > 0))')"
 
+    sl_lock_release "$STATE_SYNC_LOCK" "$lock_token"
+    rm -f "$records_file" "$old_records_file"
     printf '{"saved":true,"changed":%d,"changed_hashes":%s}' "$changed" "$hash_json"
 }
 
@@ -228,26 +426,9 @@ cmd_ping_source() {
 
 # --- apply_changes <changed_hashes> (fire-and-forget, uses caches) ---
 cmd_apply_changes() {
-    local changed="$1"
-    mkdir -p "$STATE_DIR" "$STATE_HISTORY_DIR"
-    if [ -f "${STATE_DIR}/refreshing" ]; then
-        echo '{"refreshing":true}'
-        return 0
-    fi
-    local bg_pid=$$
-    printf '%s' "$bg_pid" > "${STATE_DIR}/refreshing"
-    (
-        _sl_source_libs
-        config_load "$SL_NAME"
-        sl_cfg_load
-        sl_sel_sync "${STATE_DIR}/links.work" "$changed"
-        sl_clash_wait_ready 2>/dev/null
-        [ -s "$STATE_LINKS_FULL" ] && sl_sel_display_ping "$(sl_clash_group_tag "$SL_CFG_TARGET_SECTION")" "$STATE_LINKS_FULL"
-        rm -f "${STATE_DIR}/refreshing"
-    ) </dev/null >/dev/null 2>&1 &
-    _refresh_safety_timeout
-    echo '{"refreshing":true}'
-    return 0
+    local changed="${1:--}"
+    [ -z "$changed" ] && changed="-"
+    _cmd_start_sync_job "$changed" "Changes applied" "Subscription rebuild failed"
 }
 
 # --- reset_source_stats <source_idx> ---
@@ -296,25 +477,7 @@ cmd_select_proxy() {
 
 # --- refresh_now (fire-and-forget: starts background, returns immediately) ---
 cmd_refresh_now() {
-    mkdir -p "$STATE_DIR" "$STATE_HISTORY_DIR"
-    if [ -f "${STATE_DIR}/refreshing" ]; then
-        echo '{"refreshing":true}'
-        return 0
-    fi
-    local bg_pid=$$
-    printf '%s' "$bg_pid" > "${STATE_DIR}/refreshing"
-    (
-        _sl_source_libs
-        config_load "$SL_NAME"
-        sl_cfg_load
-        sl_sel_sync "${STATE_DIR}/links.work"
-        sl_clash_wait_ready 2>/dev/null
-        [ -s "$STATE_LINKS_FULL" ] && sl_sel_display_ping "$(sl_clash_group_tag "$SL_CFG_TARGET_SECTION")" "$STATE_LINKS_FULL"
-        rm -f "${STATE_DIR}/refreshing"
-    ) </dev/null >/dev/null 2>&1 &
-    _refresh_safety_timeout
-    echo '{"refreshing":true}'
-    return 0
+    _cmd_start_sync_job "" "Refresh completed" "Subscription refresh failed"
 }
 
 # --- reset_stats ---
@@ -378,6 +541,8 @@ cmd_get_info() {
     loadavg="$(cat /proc/loadavg 2>/dev/null | awk '{print $1", "$2", "$3}' || echo "—")"
     mem_total="$(grep MemTotal /proc/meminfo 2>/dev/null | awk '{print $2}' || echo 0)"
     mem_free="$(grep MemFree /proc/meminfo 2>/dev/null | awk '{print $2}' || echo 0)"
+    [ -z "$mem_total" ] && mem_total=0
+    [ -z "$mem_free" ] && mem_free=0
 
     jq -c -n \
         --arg sl "$sl_ver" --arg pk "$podkop_ver" \

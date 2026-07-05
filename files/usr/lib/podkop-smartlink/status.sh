@@ -5,8 +5,9 @@ sl_cur_url()   { [ -f "$STATE_CURRENT" ] && cut -f1 "$STATE_CURRENT" 2>/dev/null
 
 sl_cur_set() {
     local url="$1" tag="$2" title="$3"
-    printf '%s\t%s\t%s\t%s\n' "$url" "$tag" "$title" "$(date +%s)" > "${STATE_CURRENT}.tmp"
-    mv "${STATE_CURRENT}.tmp" "$STATE_CURRENT"
+    local tmp="${STATE_CURRENT}.$$"
+    printf '%s\t%s\t%s\t%s\n' "$url" "$tag" "$title" "$(date +%s)" > "$tmp"
+    mv "$tmp" "$STATE_CURRENT"
 }
 
 # Persist current selection to UCI (for cross-reboot restore).
@@ -22,21 +23,102 @@ sl_cur_persist() {
 sl_cur_update_tag() {
     [ -f "$STATE_CURRENT" ] || return 1
     local tag="$1"
+    local tmp="${STATE_CURRENT}.$$"
     awk -F "$TAB" -v t="$tag" 'BEGIN{OFS="\t"} {$2=t; print; exit}' \
-        "$STATE_CURRENT" > "${STATE_CURRENT}.tmp" && mv "${STATE_CURRENT}.tmp" "$STATE_CURRENT"
+        "$STATE_CURRENT" > "$tmp" && mv "$tmp" "$STATE_CURRENT"
 }
 
 sl_cur_clear() {
-    rm -f "$STATE_CURRENT" "${STATE_CURRENT}.tmp"
+    rm -f "$STATE_CURRENT" "${STATE_CURRENT}".* 2>/dev/null
 }
 
 # Links cache (for diff detection).
-sl_links_save_cache() { sl_links_urls "$1" | sort -u > "${STATE_LINKS_CACHE}.tmp" && mv "${STATE_LINKS_CACHE}.tmp" "$STATE_LINKS_CACHE"; }
+sl_links_save_cache() { local tmp="${STATE_LINKS_CACHE}.$$"; sl_links_urls "$1" > "$tmp" && mv "$tmp" "$STATE_LINKS_CACHE"; }
 sl_links_changed() {
     local new_set
-    new_set="$(sl_links_urls "$1" | sort -u)"
+    new_set="$(sl_links_urls "$1")"
     [ -f "$STATE_LINKS_CACHE" ] || return 1
     [ "$new_set" != "$(cat "$STATE_LINKS_CACHE")" ]
+}
+
+sl_tags_cache_clear() {
+    rm -f "$STATE_TAGS_CACHE" "${STATE_TAGS_CACHE}".* 2>/dev/null
+}
+
+sl_tags_signature() {
+    [ -f "$1" ] || return 1
+    md5sum "$1" 2>/dev/null | awk '{print $1}'
+}
+
+sl_tags_cache_save() {
+    local group_tag="$1" links_file="$2" tags="$3"
+    local tag_count link_count signature tmp
+    [ -n "$group_tag" ] || return 1
+    [ -n "$tags" ] || return 1
+    signature="$(sl_tags_signature "$links_file")" || return 1
+    [ -n "$signature" ] || return 1
+    tag_count="$(printf '%s\n' "$tags" | grep -c . 2>/dev/null || echo 0)"
+    link_count="$(grep -c . "$links_file" 2>/dev/null || echo 0)"
+    case "$tag_count" in *[!0-9]*) tag_count=0 ;; esac
+    case "$link_count" in *[!0-9]*) link_count=0 ;; esac
+    [ "$link_count" -gt 0 ] || return 1
+    [ "$tag_count" -eq "$link_count" ] || return 1
+    tmp="${STATE_TAGS_CACHE}.$$"
+    {
+        printf '%s\n' "$group_tag"
+        printf '%s\n' "$signature"
+        printf '%s\n' "$link_count"
+        printf '%s\n' "$tags"
+    } > "$tmp" && mv "$tmp" "$STATE_TAGS_CACHE"
+}
+
+sl_tags_cache_get() {
+    local group_tag="$1" links_file="$2"
+    local cached_group cached_signature cached_count signature link_count
+    [ -s "$STATE_TAGS_CACHE" ] || return 1
+    cached_group="$(sed -n '1p' "$STATE_TAGS_CACHE" 2>/dev/null)"
+    [ "$cached_group" = "$group_tag" ] || return 1
+    cached_signature="$(sed -n '2p' "$STATE_TAGS_CACHE" 2>/dev/null)"
+    signature="$(sl_tags_signature "$links_file")" || return 1
+    [ -n "$signature" ] && [ "$cached_signature" = "$signature" ] || return 1
+    cached_count="$(sed -n '3p' "$STATE_TAGS_CACHE" 2>/dev/null)"
+    link_count="$(grep -c . "$links_file" 2>/dev/null || echo 0)"
+    case "$cached_count" in *[!0-9]*) cached_count=0 ;; esac
+    case "$link_count" in *[!0-9]*) link_count=0 ;; esac
+    [ "$cached_count" -eq "$link_count" ] || return 1
+    sed '1,3d' "$STATE_TAGS_CACHE" 2>/dev/null
+}
+
+sl_tags_get_valid() {
+    local group_tag="$1" links_file="$2"
+    local tags tag_count link_count
+    [ -n "$group_tag" ] || return 1
+
+    link_count="$(grep -c . "$links_file" 2>/dev/null || echo 0)"
+    case "$link_count" in *[!0-9]*) link_count=0 ;; esac
+    [ "$link_count" -gt 0 ] || return 1
+
+    if tags="$(sl_tags_cache_get "$group_tag" "$links_file")" && [ -n "$tags" ]; then
+        printf '%s\n' "$tags"
+        return 0
+    fi
+
+    tags="$(sl_clash_get_outbound_tags "$group_tag" 2>/dev/null)" || tags=""
+    [ -n "$tags" ] || return 1
+
+    tag_count="$(printf '%s\n' "$tags" | grep -c . 2>/dev/null || echo 0)"
+    case "$tag_count" in *[!0-9]*) tag_count=0 ;; esac
+    if [ "$tag_count" -ne "$link_count" ]; then
+        log "Ignoring outbound tags: count mismatch ($tag_count/$link_count)" "warn"
+        return 1
+    fi
+
+    sl_tags_cache_save "$group_tag" "$links_file" "$tags" 2>/dev/null || true
+    printf '%s\n' "$tags"
+}
+
+sl_tags_get_for_status() {
+    sl_tags_get_valid "$1" "$2" 2>/dev/null || true
 }
 
 # Update timestamps.
@@ -63,9 +145,9 @@ sl_status_build() {
     interval_sec="$(sl_interval_to_sec "$SL_CFG_UPDATE_INTERVAL")"
     next=$(( $(sl_safe_num "$(sl_last_update)") + interval_sec ))
 
-    # Precompute tags
+    # Precompute tags without hitting Clash API when the cached map is still valid.
     local tags=""
-    [ -n "$group_tag" ] && tags="$(sl_clash_get_outbound_tags "$group_tag" 2>/dev/null)"
+    tags="$(sl_tags_get_for_status "$group_tag" "$links_file")"
 
     local stats_cache="${STATE_DIR}/stats.$$"
     local keymap="${STATE_DIR}/keymap.$$"
@@ -90,7 +172,7 @@ sl_status_build() {
     [ -z "$ping_arg" ] && ping_arg="/dev/null"
 
     awk -F "$TAB" -v sc="$stats_cache" -v km="$keymap" -v tf="$tags_file" \
-        -v pa="$ping_arg" -v cur_url="$cur_url" '
+        -v pa="$ping_arg" -v cur_url="$cur_url" -v max_ping="$SL_CFG_MAX_PING" '
         BEGIN {
             while ((getline line < sc) > 0) {
                 n = split(line, a, "\t")
@@ -117,7 +199,8 @@ sl_status_build() {
             url = $1; title = $2; src_idx = (NF >= 4 ? $4 : "0")
             tag = tags[i]
             lat = (tag in ping ? ping[tag] : "")
-            alive = (lat != "" && lat != "0" ? "true" : "false")
+            healthy = (lat ~ /^[0-9]+$/ && (max_ping + 0 <= 0 || lat + 0 <= max_ping + 0))
+            alive = (healthy ? "true" : "false")
             sel = (url == cur_url ? "true" : "false")
             avail = "0"; stab = "0"; total = "0"
             if (url in keys) {
@@ -127,9 +210,22 @@ sl_status_build() {
                     avail = sa[1]; stab = sa[2]; total = sa[3]
                 }
             }
-            print tag "\t" url "\t" title "\t" src_idx "\t" (lat == "" ? "0" : lat) "\t" alive "\t" sel "\t" avail "\t" stab "\t" total "\t" i
+            print tag "\t" url "\t" title "\t" src_idx "\t" (lat == "" ? "0" : lat) "\t" alive "\t" sel "\t" avail "\t" stab "\t" total "\t" i "\tfalse\t"
         }
     ' "$links_file" > "$data_file" 2>/dev/null
+
+    if [ -s "$STATE_LINKS_EXCLUDED" ]; then
+        local active_count
+        active_count="$(wc -l < "$data_file" 2>/dev/null || echo 0)"
+        active_count="$(sl_safe_num "$active_count")"
+        awk -F "$TAB" -v start="$active_count" '
+            NF >= 4 {
+                reason = (NF >= 5 ? $5 : "")
+                i++
+                print "\t" $1 "\t" $2 "\t" $4 "\t0\tfalse\tfalse\t0\t0\t0\t" (start + i) "\ttrue\t" reason
+            }
+        ' "$STATE_LINKS_EXCLUDED" >> "$data_file" 2>/dev/null
+    fi
 
     rm -f "$tags_file" "$stats_cache" "$keymap"
 
@@ -142,7 +238,8 @@ sl_status_build() {
                     source: (.[3] | tonumber), ping: (.[4] | tonumber),
                     alive: (.[5] == "true"), selected: (.[6] == "true"),
                     availability: (.[7] | tonumber), stability: (.[8] | tonumber),
-                    checks: (.[9] | tonumber), index: (.[10] | tonumber)
+                    checks: (.[9] | tonumber), index: (.[10] | tonumber),
+                    excluded: (.[11] == "true"), exclude_reason: (.[12] // "")
                 }
             )
         ' "$data_file")"
@@ -155,7 +252,9 @@ sl_status_build() {
         '{tag:$tag,url:$url,title:$title}')"
 
     local refreshing="false"
-    [ -f "${STATE_DIR}/refreshing" ] && refreshing="true"
+    sl_refresh_active && refreshing="true"
+    local refresh_result
+    refresh_result="$(sl_refresh_result_get)"
 
     jq -n -c \
         --arg mode "auto" \
@@ -163,10 +262,12 @@ sl_status_build() {
         --argjson proxies "$proxies_json" --argjson now "$now" --argjson next "$next" \
         --argjson last_update "$(sl_safe_num "$(sl_last_update)")" \
         --argjson refreshing "$refreshing" \
+        --argjson refresh_result "$refresh_result" \
         '{mode:$mode,target_section:$target,group_tag:$group,
           current:$current,proxies:$proxies,now:$now,next_update:$next,
-          last_update:$last_update,refreshing:$refreshing}' > "${STATE_STATUS}.tmp"
+          last_update:$last_update,refreshing:$refreshing,
+          refresh_result:$refresh_result}' > "${STATE_STATUS}.$$"
 
-    mv "${STATE_STATUS}.tmp" "$STATE_STATUS"
+    mv "${STATE_STATUS}.$$" "$STATE_STATUS"
     cat "$STATE_STATUS"
 }

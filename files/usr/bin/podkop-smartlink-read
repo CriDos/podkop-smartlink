@@ -1,0 +1,10 @@
+#!/bin/sh
+
+case "$1" in
+    get_status|get_sources|get_info|show_version|show_config)
+        exec /usr/bin/podkop-smartlink "$@"
+        ;;
+esac
+
+printf '{"error":"forbidden"}\n'
+exit 1

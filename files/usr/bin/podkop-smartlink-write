@@ -1,0 +1,10 @@
+#!/bin/sh
+
+case "$1" in
+    ping_all|ping_source|reset_source_stats|reset_stats|select_proxy|refresh_now|save_sources|apply_changes|save_config)
+        exec /usr/bin/podkop-smartlink "$@"
+        ;;
+esac
+
+printf '{"error":"forbidden"}\n'
+exit 1

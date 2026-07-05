@@ -13,30 +13,30 @@ var I18N = {
     tabSettings: "Настройки",
     general: "Основные",
     tabSources: "Подписки",
-    updateInterval: "Обновление списка",
-    updateIntervalDesc: "Как часто обновлять список серверов из подписки.",
+    updateInterval: "Обновление подписок",
+    updateIntervalDesc: "Как часто скачивать подписки и обновлять список серверов.",
     xhttp: "Расширенные транспорты",
-    xhttpDesc: "Включите, если установлен расширенный sing-box.",
-    usePriority: "Приоритет источников",
-    usePriorityDesc: "Учитывать порядок подписок при выборе сервера. Источник #1 имеет преимущество.",
-    selectedVpn: "Мониторинг активного сервера",
-    checkInterval: "Проверка каждые",
-    checkIntervalDesc: "Раз в N секунд пингуется активный сервер.",
-    maxPing: "Лимит пинга",
-    maxPingDesc: "Пинг выше этого значения считается ошибкой.",
-    failCount: "Переключение после",
-    failCountDesc: "После N ошибок подряд пингуются все серверы и выбирается лучший.",
-    allVpn: "Мониторинг всех серверов",
-    about: "О системе",
+    xhttpDesc: "Показывать XHTTP и другие новые типы подключений. Включайте, если ваш sing-box их поддерживает.",
+    usePriority: "Учитывать порядок подписок",
+    usePriorityDesc: "При автозамене выбирать из подписок выше по списку.",
+    selectedVpn: "Проверка сервера",
+    checkInterval: "Интервал проверки",
+    checkIntervalDesc: "Как часто проверять текущий сервер.",
+    maxPing: "Максимальный пинг",
+    maxPingDesc: "Если пинг выше, сервер считается проблемным.",
+    failCount: "Менять после",
+    failCountDesc: "После скольких проблем подряд искать замену.",
+    allVpn: "Проверка серверов",
+    about: "Система",
     version: "Версия",
     uptime: "Аптайм",
-    pingAllInterval: "Проверка каждые",
-    pingAllIntervalDesc: "Раз в N секунд пингуются все сервера.",
-    pingTimeout: "Таймаут пинга",
-    pingTimeoutDesc: "Сколько миллисекунд ждать ответа от сервера.",
-    testUrl: "URL теста задержки",
-    testUrlDesc: "Адрес для проверки пинга через туннель.",
-    noSources: "Нет источников. Добавьте подписку или прямую ссылку ниже.",
+    pingAllInterval: "Интервал проверки",
+    pingAllIntervalDesc: "Как часто обновлять пинг и статистику таблицы.",
+    pingTimeout: "Ждать ответ до",
+    pingTimeoutDesc: "Сколько ждать ответ при проверке пинга.",
+    testUrl: "URL для проверки",
+    testUrlDesc: "Адрес для проверки доступности и задержки.",
+    noSources: "Нет подписок. Добавьте подписку или прямую ссылку ниже.",
     refreshSubs: "Обновить подписки",
     save: "Применить",
     saved: "Сохранено",
@@ -45,6 +45,9 @@ var I18N = {
     error: "Ошибка",
     addSource: "Добавить",
     urlPlaceholder: "https://… или vless://…",
+    excludeServers: "Исключать сервера",
+    excludePlaceholder: "Россия; Russian; gRPC; sni=www.swift.com",
+    excludeDesc: "Разделяйте через ; например: Россия; Russian; gRPC; sni=www.swift.com. Ищем в названии, хосте и ссылке сервера.",
     invalidUrl: "Неверный формат. Используйте ссылку подписки (https://) или прокси (vless://, ss://, trojan://, hy2://, hysteria2://, socks://)",
     duplicateUrl: "Этот источник уже есть в списке",
     colName: "Название",
@@ -65,14 +68,14 @@ var I18N = {
     refreshDone: "Подписки обновлены",
     refreshFailed: "Не удалось обновить подписки",
     totalServers: "Всего серверов",
-    aliveServers: "Живых",
+    aliveServers: "Здоровых",
     currentVpn: "Текущий VPN",
     notSelected: "не выбран",
     lastUpdated: "Обновлено",
     autoRefresh: "авто",
     never: "никогда",
     aboutTitle: "Podkop SmartLink",
-    aboutDesc: "Companion для Podkop — импорт VPN-подписок и sticky health-checked выбор сервера для selector-группы sing-box.",
+    aboutDesc: "Следит за подписками, проверяет сервера и держит Podkop на рабочем подключении.",
     aboutProject: "Проект",
     aboutSystem: "Система",
     aboutLinks: "Ссылки",
@@ -90,30 +93,30 @@ var I18N = {
     tabSettings: "Settings",
     general: "General",
     tabSources: "Subscriptions",
-    updateInterval: "List update",
-    updateIntervalDesc: "How often to refresh the server list from subscriptions.",
-    xhttp: "Extended transports",
-    xhttpDesc: "Enable if extended sing-box is installed.",
-    usePriority: "Source priority",
-    usePriorityDesc: "Consider subscription order when selecting server. Source #1 has advantage.",
-    selectedVpn: "Active server monitoring",
+    updateInterval: "Subscription update",
+    updateIntervalDesc: "How often to reread subscriptions and update the server list.",
+    xhttp: "New transports",
+    xhttpDesc: "Keep links with newer transports, such as XHTTP. Requires sing-box extended.",
+    usePriority: "Respect subscription order",
+    usePriorityDesc: "When replacing a server, look for a healthy server in higher subscriptions first.",
+    selectedVpn: "Current server",
     checkInterval: "Check every",
-    checkIntervalDesc: "Ping the active server every N seconds.",
-    maxPing: "Ping limit",
-    maxPingDesc: "Ping above this value counts as an error.",
-    failCount: "Switch after",
-    failCountDesc: "After N consecutive errors, all servers are pinged and the best is selected.",
-    allVpn: "All servers monitoring",
-    about: "About",
+    checkIntervalDesc: "How often to check the selected server. Select an interval in seconds.",
+    maxPing: "Ping threshold",
+    maxPingDesc: "A server is considered healthy while ping stays at or below this value. Select a threshold in milliseconds.",
+    failCount: "Replace after",
+    failCountDesc: "How many failed checks in a row trigger replacement search.",
+    allVpn: "Background checks",
+    about: "System",
     version: "Version",
     uptime: "Uptime",
-    pingAllInterval: "Check every",
-    pingAllIntervalDesc: "All servers are pinged every N seconds.",
-    pingTimeout: "Ping timeout",
-    pingTimeoutDesc: "How many milliseconds to wait for a server response.",
-    testUrl: "Latency test URL",
-    testUrlDesc: "URL for ping check through the tunnel.",
-    noSources: "No sources. Add a subscription or direct link below.",
+    pingAllInterval: "Check list every",
+    pingAllIntervalDesc: "How often to refresh ping and statistics for all servers in the table. Select an interval in minutes.",
+    pingTimeout: "Check timeout",
+    pingTimeoutDesc: "How long to wait for a server response. Select a timeout in seconds.",
+    testUrl: "Check URL",
+    testUrlDesc: "URL opened through VPN to measure latency.",
+    noSources: "No subscriptions. Add a subscription or direct link below.",
     refreshSubs: "Refresh subscriptions",
     save: "Apply",
     saved: "Saved",
@@ -122,6 +125,9 @@ var I18N = {
     error: "Error",
     addSource: "Add",
     urlPlaceholder: "https://… or vless://…",
+    excludeServers: "Exclude servers",
+    excludePlaceholder: "Russian; Россия; gRPC; sni=www.swift.com",
+    excludeDesc: "Separate with ; for example: Russian; Россия; gRPC; sni=www.swift.com. Matches server name, host, and link.",
     invalidUrl: "Invalid format. Use a subscription URL (https://) or proxy link (vless://, ss://, trojan://, hy2://, hysteria2://, socks://)",
     duplicateUrl: "This source is already in the list",
     colName: "Name",
@@ -142,14 +148,14 @@ var I18N = {
     refreshDone: "Subscriptions refreshed",
     refreshFailed: "Failed to refresh subscriptions",
     totalServers: "Total servers",
-    aliveServers: "Alive",
+    aliveServers: "Healthy",
     currentVpn: "Current VPN",
     notSelected: "not selected",
     lastUpdated: "Updated",
     autoRefresh: "auto",
     never: "never",
     aboutTitle: "Podkop SmartLink",
-    aboutDesc: "Companion for Podkop — import VPN subscriptions and sticky health-checked server selection for sing-box selector groups.",
+    aboutDesc: "SmartLink keeps subscriptions, checks, and server choice in one place so Podkop stays on a working VPN connection.",
     aboutProject: "Project",
     aboutSystem: "System",
     aboutLinks: "Links",
@@ -183,33 +189,34 @@ function t(key) {
 /* API layer                                                    */
 /* ============================================================ */
 
-var BIN = "/usr/bin/podkop-smartlink";
+var READ_BIN = "/usr/bin/podkop-smartlink-read";
+var WRITE_BIN = "/usr/bin/podkop-smartlink-write";
 
-function execCmd(args, stdin) {
-  return fs.exec(BIN, args, stdin).then(function (res) {
+function execCmd(bin, args) {
+  return fs.exec(bin, args).then(function (res) {
     var out = (res && res.stdout) || "";
     try { return JSON.parse(out); } catch (e) { return { error: "parse_error", raw: out }; }
   });
 }
 
 var api = {
-  status: function () { return execCmd(["get_status"]); },
-  sources: function () { return execCmd(["get_sources"]); },
-  pingAll: function () { return execCmd(["ping_all"]); },
-  pingSource: function (idx) { return execCmd(["ping_source", String(idx)]); },
-  resetSource: function (idx) { return execCmd(["reset_source_stats", String(idx)]); },
-  resetAll: function () { return execCmd(["reset_stats"]); },
-  selectProxy: function (tag) { return execCmd(["select_proxy", tag]); },
-  refresh: function () { return execCmd(["refresh_now"]); },
+  status: function () { return execCmd(READ_BIN, ["get_status"]); },
+  sources: function () { return execCmd(READ_BIN, ["get_sources"]); },
+  pingAll: function () { return execCmd(WRITE_BIN, ["ping_all"]); },
+  pingSource: function (idx) { return execCmd(WRITE_BIN, ["ping_source", String(idx)]); },
+  resetSource: function (idx) { return execCmd(WRITE_BIN, ["reset_source_stats", String(idx)]); },
+  resetAll: function () { return execCmd(WRITE_BIN, ["reset_stats"]); },
+  selectProxy: function (tag) { return execCmd(WRITE_BIN, ["select_proxy", tag]); },
+  refresh: function () { return execCmd(WRITE_BIN, ["refresh_now"]); },
   saveSources: function (list) {
-    var urls = list.map(function (s) { return { url: s.url }; });
-    return execCmd(["save_sources", JSON.stringify(urls)]);
+    var urls = list.map(function (s) { return { url: s.url, exclude: s.exclude || "" }; });
+    return execCmd(WRITE_BIN, ["save_sources", JSON.stringify(urls)]);
   },
   applyChanges: function (changedHashes) {
-    return execCmd(["apply_changes", changedHashes.join(",")]);
+    return execCmd(WRITE_BIN, ["apply_changes", changedHashes.join(",")]);
   },
-  saveConfig: function () { return execCmd(["save_config"]); },
-  getInfo: function () { return execCmd(["get_info"]); },
+  saveConfig: function () { return execCmd(WRITE_BIN, ["save_config"]); },
+  getInfo: function () { return execCmd(READ_BIN, ["get_info"]); },
 };
 
 /* ============================================================ */
@@ -236,8 +243,21 @@ function el(tag, attrs, children) {
 
 function setBusy(busy) {
   state.busy = busy;
-  var btns = document.querySelectorAll(".sl-bottom-bar button, .sl-icon-btn, .sl-select-btn");
-  btns.forEach(function (b) { b.disabled = busy; });
+  if (!busy) {
+    if (state.activeTab === "sources" && sourcesContainer) renderSources();
+    return;
+  }
+  var btns = document.querySelectorAll(".sl-bottom-bar button, .sl-icon-btn, .sl-select-btn, .sl-add-row button");
+  btns.forEach(function (b) {
+    b.disabled = true;
+  });
+  document.querySelectorAll(".sl-drag-handle").forEach(function (h) {
+    h.setAttribute("draggable", "false");
+    h.classList.add("sl-disabled");
+  });
+  document.querySelectorAll(".sl-exclude-input").forEach(function (i) {
+    i.disabled = true;
+  });
 }
 
 function fmtPing(p) {
@@ -246,13 +266,17 @@ function fmtPing(p) {
 }
 
 function fmtPct(s) {
-  if (!s) return "—";
-  return Math.round(s * 100) + "%";
+  if (s === null || s === undefined || s === "") return "—";
+  var n = Number(s);
+  if (isNaN(n)) return "—";
+  return Math.round(n * 100) + "%";
 }
 
 function metricColor(s) {
-  if (!s) return "";
-  var pct = Math.round(s * 100);
+  if (s === null || s === undefined || s === "") return "";
+  var n = Number(s);
+  if (isNaN(n)) return "";
+  var pct = Math.round(n * 100);
   return pct >= 90 ? "sl-ok" : pct >= 70 ? "sl-warn" : "sl-bad";
 }
 
@@ -275,6 +299,28 @@ function timeAgo(ts) {
   return dd + "." + mm + " " + hh + ":" + mi;
 }
 
+function storageGet(key, fallback) {
+  try {
+    return window.localStorage.getItem(key) || fallback;
+  } catch (e) {
+    return fallback;
+  }
+}
+
+function storageSet(key, value) {
+  try {
+    window.localStorage.setItem(key, value);
+  } catch (e) {}
+}
+
+function nextFrame(fn) {
+  return (window.requestAnimationFrame || window.setTimeout)(fn, 0);
+}
+
+function cancelFrame(id) {
+  return (window.cancelAnimationFrame || window.clearTimeout)(id);
+}
+
 /* ============================================================ */
 /* State                                                        */
 /* ============================================================ */
@@ -287,12 +333,44 @@ var state = {
   expanded: {},
   sortKey: {},
   sortDir: {},
-  activeTab: localStorage.getItem("sl_active_tab") || "settings",
+  activeTab: storageGet("sl_active_tab", "settings"),
   pinging: {},   // source idx -> true while pinging
   dirty: false,  // local unsaved changes to sources
+  needsApply: false,
+  pendingHashes: [],
 };
 
 var sourcesContainer = null;
+
+function prepareSources(list) {
+  return (list || []).map(function (src, i) {
+    if (typeof src.backendIndex !== "number") src.backendIndex = i;
+    src.filterDirty = false;
+    return src;
+  });
+}
+
+function sourceRuntimeIndex(src, fallback) {
+  return typeof src.backendIndex === "number" ? src.backendIndex : fallback;
+}
+
+function markSourcesDirty(keepOpen) {
+  state.dirty = true;
+  if (keepOpen) return;
+  state.expanded = {};
+  state.sortKey = {};
+  state.sortDir = {};
+  state.pinging = {};
+}
+
+function refreshErrorMessage(st) {
+  var rr = st && st.refresh_result;
+  return (rr && rr.message) || t("refreshFailed");
+}
+
+function apiErrorMessage(res, fallback) {
+  return (res && (res.message || res.stderr || res.error)) || fallback || t("error");
+}
 
 function loadStatus() {
   return api.status().then(function (st) {
@@ -308,7 +386,7 @@ function loadAll() {
   return Promise.all([api.sources(), api.status()]).then(function (r) {
     var srcs = r[0], st = r[1];
     if (!state.dirty) {
-      state.sources = (srcs && srcs.sources) || [];
+      state.sources = prepareSources((srcs && srcs.sources) || []);
     }
     state.proxies = (st && st.proxies) || [];
     state.current = (st && st.current) || null;
@@ -349,6 +427,7 @@ function sortProxies(proxies, srcIdx) {
   var sorted = proxies.slice();
   sorted.sort(function (a, b) {
     var va, vb;
+    if (!!a.excluded !== !!b.excluded) return a.excluded ? 1 : -1;
     if (sk === "ping") { va = a.ping || 99999; vb = b.ping || 99999; }
     else if (sk === "availability") { va = a.availability || 0; vb = b.availability || 0; }
     else if (sk === "stability") { va = a.stability || 0; vb = b.stability || 0; }
@@ -359,6 +438,53 @@ function sortProxies(proxies, srcIdx) {
     return 0;
   });
   return sorted;
+}
+
+function handleProxySelect(btn, tag) {
+  btn.disabled = true;
+  btn.textContent = "…";
+  api.selectProxy(tag).then(function (res) {
+    if (!res || res.error) {
+      btn.disabled = false;
+      btn.textContent = t("select");
+      toast(t("error"), "err");
+      return;
+    }
+    toast(t("proxySelected"), "ok");
+    state.proxies.forEach(function (pp) { pp.selected = (pp.tag === tag); });
+    if (res.current) state.current = res.current;
+
+    var sumVal = document.querySelector(".sl-summary .sl-summary-value");
+    if (sumVal) {
+      sumVal.textContent = state.current ? state.current.title : t("notSelected");
+      sumVal.className = "sl-summary-value" + (state.current ? " sl-ok" : "");
+    }
+
+    state.sources.forEach(function (src, si) {
+      var row = document.querySelector(".sl-source-wrapper[data-idx='" + si + "'] .sl-source-row");
+      if (!row) return;
+      var srcIdx = sourceRuntimeIndex(src, si);
+      var hasSel = state.proxies.some(function (pp) { return pp.source === srcIdx && pp.selected; });
+      row.classList.toggle("sl-source-active", hasSel);
+    });
+
+    var sourceIndex = buildSourceIndex();
+    Object.keys(state.expanded).forEach(function (idx) {
+      var i = parseInt(idx, 10);
+      var div = document.querySelector("[data-vpn='" + i + "']");
+      var src = state.sources[i];
+      if (div) {
+        var srcIdx = sourceRuntimeIndex(src || {}, i);
+        var sourceStats = sourceIndex.bySource[String(srcIdx)];
+        var srcProxies = sourceStats ? sourceStats.proxies : [];
+        renderVpnTable(div, srcProxies, i);
+      }
+    });
+  }, function () {
+    btn.disabled = false;
+    btn.textContent = t("select");
+    toast(t("error"), "err");
+  });
 }
 
 function renderVpnTable(container, proxies, srcIdx) {
@@ -396,21 +522,22 @@ function renderVpnTable(container, proxies, srcIdx) {
   table.appendChild(thead);
 
   var tbody = el("tbody", {});
+  var frag = document.createDocumentFragment();
   sorted.forEach(function (p) {
-    var tr = el("tr", { class: p.selected ? "sl-row-selected" : "" });
+    var tr = el("tr", { class: (p.selected ? "sl-row-selected" : "") + (p.excluded ? " sl-row-excluded" : "") });
 
     var nameTd = el("td", { class: "sl-td-name" }, [p.title || "—"]);
     if (p.selected) nameTd.classList.add("sl-bold");
     tr.appendChild(nameTd);
 
     // Ping: "—" if never pinged (no checks), "0" red if dead, else value
-    var neverPing = !p.checks || p.checks === 0;
+    var neverPing = p.excluded || !p.checks || p.checks === 0;
     var pingTd = el("td", { class: "sl-td-ping sl-bold " + (neverPing ? "" : (pingColor(p.ping) || "sl-bad")) });
     pingTd.textContent = neverPing ? "—" : fmtPing(p.ping);
     tr.appendChild(pingTd);
 
     // Stats: always show if any history exists (checks > 0)
-    var hasStats = p.checks && p.checks > 0;
+    var hasStats = !p.excluded && p.checks && p.checks > 0;
     var avTd = el("td", { class: "sl-td-metric " + (hasStats ? (metricColor(p.availability) || "") : "") });
     avTd.textContent = hasStats ? fmtPct(p.availability) : "—";
     tr.appendChild(avTd);
@@ -421,57 +548,27 @@ function renderVpnTable(container, proxies, srcIdx) {
 
     var actTd = el("td", { class: "sl-td-action" });
     var btn = el("button", { class: "cbi-button cbi-button-apply sl-select-btn" });
-  if (state.busy) btn.disabled = true;
-    if (!p.tag) {
+    if (state.busy) btn.disabled = true;
+    if (p.excluded) {
+      btn.disabled = true; btn.textContent = "—";
+    } else if (!p.tag) {
       btn.disabled = true; btn.textContent = "—";
     } else if (p.selected) {
       btn.disabled = true; btn.textContent = t("active");
       btn.classList.add("sl-btn-active");
     } else {
       btn.textContent = t("select");
-      btn.addEventListener("click", function () {
-        btn.disabled = true; btn.textContent = "…";
-        api.selectProxy(p.tag).then(function (res) {
-          if (!res || res.error) {
-            btn.disabled = false; btn.textContent = t("select");
-            toast(t("error"), "err");
-            return;
-          }
-          toast(t("proxySelected"), "ok");
-          // Update global state
-          state.proxies.forEach(function (pp) { pp.selected = (pp.tag === p.tag); });
-          if (res.current) state.current = res.current;
-          // Update summary bar (current VPN title)
-          var sumVal = document.querySelector(".sl-summary .sl-summary-value");
-          if (sumVal) {
-            sumVal.textContent = state.current ? state.current.title : t("notSelected");
-            sumVal.className = "sl-summary-value" + (state.current ? " sl-ok" : "");
-          }
-          // Update source row highlights (add/remove sl-source-active)
-          state.sources.forEach(function (src, si) {
-            var row = document.querySelector(".sl-source-wrapper[data-idx='" + si + "'] .sl-source-row");
-            if (!row) return;
-            var hasSel = state.proxies.some(function (pp) { return pp.source === si && pp.selected; });
-            row.classList.toggle("sl-source-active", hasSel);
-          });
-          // Re-render all expanded VPN tables (old active + new active)
-          Object.keys(state.expanded).forEach(function (idx) {
-            var i = parseInt(idx, 10);
-            var div = document.querySelector("[data-vpn='" + i + "']");
-            if (div) {
-              var srcProxies = state.proxies.filter(function (pp) { return pp.source === i; });
-              renderVpnTable(div, srcProxies, i);
-            }
-          });
-        }, function () {
-          btn.disabled = false; btn.textContent = t("select");
-          toast(t("error"), "err");
-        });
-      });
+      btn.setAttribute("data-tag", p.tag);
     }
     actTd.appendChild(btn);
     tr.appendChild(actTd);
-    tbody.appendChild(tr);
+    frag.appendChild(tr);
+  });
+  tbody.appendChild(frag);
+  tbody.addEventListener("click", function (e) {
+    var btn = e.target.closest ? e.target.closest(".sl-select-btn[data-tag]") : null;
+    if (!btn || state.busy || btn.disabled) return;
+    handleProxySelect(btn, btn.getAttribute("data-tag"));
   });
   table.appendChild(tbody);
   container.appendChild(table);
@@ -481,13 +578,48 @@ function renderVpnTable(container, proxies, srcIdx) {
 /* Sources tab                                                  */
 /* ============================================================ */
 
+function buildSourceIndex() {
+  var index = {
+    bySource: {},
+    activeTotal: 0,
+    aliveTotal: 0,
+  };
+
+  (state.proxies || []).forEach(function (p) {
+    var src = String(p.source);
+    var bucket = index.bySource[src];
+    if (!bucket) {
+      bucket = index.bySource[src] = {
+        proxies: [],
+        active: 0,
+        alive: 0,
+        excluded: 0,
+        selected: false,
+      };
+    }
+    bucket.proxies.push(p);
+    if (p.excluded) {
+      bucket.excluded++;
+      return;
+    }
+    bucket.active++;
+    index.activeTotal++;
+    if (p.alive) {
+      bucket.alive++;
+      index.aliveTotal++;
+    }
+    if (p.selected) bucket.selected = true;
+  });
+
+  return index;
+}
+
 function renderSources() {
   if (!sourcesContainer) return;
   sourcesContainer.innerHTML = "";
+  var sourceIndex = buildSourceIndex();
 
   // Summary bar
-  var aliveCount = state.proxies.filter(function (p) { return p.ping > 0; }).length;
-  var totalCount = state.proxies.length;
   var curTitle = state.current ? state.current.title : t("notSelected");
   var summary = el("div", { class: "sl-summary" }, [
     el("span", { class: "sl-summary-item" }, [
@@ -497,8 +629,8 @@ function renderSources() {
     el("span", { class: "sl-summary-item" }, [
       el("span", { class: "sl-summary-label" }, [t("totalServers") + ":"]),
       el("span", { class: "sl-summary-value" }, [
-        el("span", { class: aliveCount > 0 ? "sl-ok" : "sl-bad" }, [String(aliveCount)]),
-        "/" + String(totalCount),
+        el("span", { class: sourceIndex.aliveTotal > 0 ? "sl-ok" : "sl-bad" }, [String(sourceIndex.aliveTotal)]),
+        "/" + String(sourceIndex.activeTotal),
       ]),
     ]),
   ]);
@@ -512,7 +644,7 @@ function renderSources() {
   // Source rows
   var list = el("div", { class: "sl-source-list" });
   state.sources.forEach(function (src, i) {
-    list.appendChild(renderSourceRow(src, i));
+    list.appendChild(renderSourceRow(src, i, sourceIndex));
   });
   sourcesContainer.appendChild(list);
   attachDragDrop(list);
@@ -524,46 +656,47 @@ function renderSources() {
   var bottomBar = el("div", { class: "sl-bottom-bar" });
 
   // Shared: wait for background refresh to finish, then reload UI
-  function waitForRefresh(btn, btnLabel, onSuccess) {
+  function waitForRefresh() {
     var attempts = 0;
-    function poll() {
-      if (attempts++ > 60) {
-        btn.disabled = false;
-        btn.textContent = btnLabel;
-        toast(t("refreshFailed"), "err");
-        loadAll();
-        return;
-      }
-      api.status().then(function (st) {
-        if (st && !st.error && !st.refreshing) {
-          btn.disabled = false;
-          btn.textContent = btnLabel;
-          if (onSuccess) onSuccess();
-          else { toast(t("refreshDone"), "ok"); }
-          loadAll();
-        } else if (st && st.error) {
-          setTimeout(poll, 1500);
-        } else {
-          setTimeout(poll, 1500);
+    return new Promise(function (resolve, reject) {
+      function poll() {
+        if (attempts++ > 60) {
+          reject(new Error(t("refreshFailed")));
+          return;
         }
-      }, function () { setTimeout(poll, 1500); });
-    }
-    setTimeout(poll, 2000);
+        api.status().then(function (st) {
+          if (st && !st.error && !st.refreshing) {
+            if (st.refresh_result && st.refresh_result.ok === false) {
+              reject(new Error(refreshErrorMessage(st)));
+            } else {
+              resolve(st);
+            }
+          } else {
+            setTimeout(poll, 1500);
+          }
+        }, function () { setTimeout(poll, 1500); });
+      }
+      setTimeout(poll, 2000);
+    });
   }
 
-  var refreshBtn = el("button", { class: "cbi-button" }, [t("refreshSubs")]);
+  var refreshBtn = el("button", { class: "cbi-button sl-refresh-btn" }, [t("refreshSubs")]);
+  if (state.dirty) refreshBtn.disabled = true;
   refreshBtn.addEventListener("click", function () {
-    if (state.busy) return;
+    if (state.busy || state.dirty) return;
     setBusy(true);
     refreshBtn.disabled = true; refreshBtn.textContent = t("refreshing");
-    api.refresh().then(function () {
-      waitForRefresh(refreshBtn, t("refreshSubs"), function () {
+    api.refresh().then(function (res) {
+      if (!res || res.error) throw new Error(apiErrorMessage(res, t("refreshFailed")));
+      return waitForRefresh().then(function () {
         toast(t("refreshDone"), "ok");
-        setBusy(false);
+        return loadAll();
       });
-    }, function () {
+    }).catch(function (err) {
+      toast((err && err.message) || t("error"), "err");
+      return loadAll();
+    }).finally(function () {
       refreshBtn.disabled = false; refreshBtn.textContent = t("refreshSubs");
-      toast(t("error"), "err");
       setBusy(false);
     });
   });
@@ -581,25 +714,34 @@ function renderSources() {
         setBusy(false);
         return;
       }
-      state.dirty = false;
-      if (res.changed === 0) {
+      if (res.changed > 0) {
+        state.needsApply = true;
+        state.pendingHashes = res.changed_hashes || [];
+      }
+      if (res.changed === 0 && !state.needsApply) {
+        state.dirty = false;
         saveBtn.disabled = false; saveBtn.textContent = t("save");
         toast(t("saved"), "ok");
         setBusy(false);
         loadAll();
         return;
       }
-      var changedHashes = res.changed_hashes || [];
+      var changedHashes = state.pendingHashes || [];
       saveBtn.textContent = t("refreshing");
-      api.applyChanges(changedHashes).then(function () {
-        waitForRefresh(saveBtn, t("save"), function () {
+      api.applyChanges(changedHashes).then(function (res) {
+        if (!res || res.error) throw new Error(apiErrorMessage(res));
+        return waitForRefresh().then(function () {
+          state.dirty = false;
+          state.needsApply = false;
+          state.pendingHashes = [];
           toast(t("saved"), "ok");
-          setBusy(false);
-          loadAll();
+          return loadAll();
         });
-      }, function () {
+      }).catch(function (err) {
+        toast((err && err.message) || t("error"), "err");
+        return loadAll();
+      }).finally(function () {
         saveBtn.disabled = false; saveBtn.textContent = t("save");
-        toast(t("error"), "err");
         setBusy(false);
       });
     }, function () {
@@ -612,11 +754,17 @@ function renderSources() {
   sourcesContainer.appendChild(bottomBar);
 }
 
-function renderSourceRow(src, i) {
-  var srcProxies = state.proxies.filter(function (p) { return p.source === i; });
-  var aliveCount = srcProxies.filter(function (p) { return p.ping > 0; }).length;
-  var isPinging = !!state.pinging[i];
-  var hasSelected = srcProxies.some(function (p) { return p.selected; });
+function renderSourceRow(src, i, sourceIndex) {
+  var srcIdx = sourceRuntimeIndex(src, null);
+  var hasBackendSource = typeof srcIdx === "number";
+  var runtimeActionsReady = hasBackendSource && !src.filterDirty;
+  var sourceStats = hasBackendSource ? sourceIndex.bySource[String(srcIdx)] : null;
+  var srcProxies = sourceStats ? sourceStats.proxies : [];
+  var aliveCount = sourceStats ? sourceStats.alive : 0;
+  var activeCount = sourceStats ? sourceStats.active : 0;
+  var pingKey = hasBackendSource ? "src_" + srcIdx : "new_" + i;
+  var isPinging = !!state.pinging[pingKey];
+  var hasSelected = !!(sourceStats && sourceStats.selected);
   var urlDisplay = src.url.length > 70 ? src.url.substring(0, 67) + "…" : src.url;
 
   var row = el("div", {
@@ -630,6 +778,9 @@ function renderSourceRow(src, i) {
   // Expand/collapse
   var expandBtn = el("span", { class: "sl-expand-btn" },
     [state.expanded[i] ? "▾" : "▸"]);
+  if (!runtimeActionsReady) {
+    expandBtn.classList.add("sl-disabled");
+  }
   row.appendChild(expandBtn);
 
   // URL
@@ -645,11 +796,11 @@ function renderSourceRow(src, i) {
   });
   row.appendChild(urlEl);
 
-  // Server count: alive/total (only after proxies are loaded)
+  // Server count: healthy/total (only after proxies are loaded)
   if (srcProxies.length) {
     var aliveSpan = el("span", { class: aliveCount > 0 ? "sl-ok" : "sl-bad" }, [String(aliveCount)]);
     var countSpan = el("span", { class: "sl-server-count" }, [
-      aliveSpan, "/", el("span", {}, [String(srcProxies.length)]),
+      aliveSpan, "/", el("span", {}, [String(activeCount)]),
     ]);
     row.appendChild(countSpan);
   }
@@ -672,16 +823,21 @@ function renderSourceRow(src, i) {
     class: "cbi-button sl-icon-btn",
     title: t("pingSourceHint"),
   }, [pingIcon]);
-  if (isPinging) pingBtn.disabled = true;
+  if (isPinging || !runtimeActionsReady) pingBtn.disabled = true;
   pingBtn.addEventListener("click", function () {
-    if (state.busy || state.pinging[i]) return;
-    state.pinging[i] = true;
+    if (state.busy || state.pinging[pingKey] || !runtimeActionsReady) return;
+    state.pinging[pingKey] = true;
     renderSources();
-    api.pingSource(i).then(function () {
-      delete state.pinging[i];
-      loadStatus();
+    api.pingSource(srcIdx).then(function (res) {
+      if (!res || res.error) {
+        toast(apiErrorMessage(res), "err");
+        return;
+      }
+      return loadStatus();
     }).catch(function () {
-      delete state.pinging[i];
+      toast(t("error"), "err");
+    }).finally(function () {
+      delete state.pinging[pingKey];
       renderSources();
     });
   });
@@ -692,21 +848,23 @@ function renderSourceRow(src, i) {
     class: "cbi-button sl-icon-btn",
     title: t("resetStatsHint"),
   }, ["⊘"]);
+  if (!runtimeActionsReady) resetBtn.disabled = true;
   resetBtn.addEventListener("click", function () {
-    if (state.busy) return;
-    // Optimistic: clear stats in local state immediately
-    srcProxies.forEach(function (p) {
-      p.availability = 0; p.stability = 0; p.checks = 0;
-    });
-    if (state.expanded[i]) {
-      var vpnDiv = document.querySelector("[data-vpn='" + i + "']");
-      if (vpnDiv) renderVpnTable(vpnDiv, srcProxies, i);
-    }
-    renderSources();
-    // Fire backend (instant, no status rebuild)
-    api.resetSource(i).then(function () {
+    if (state.busy || !runtimeActionsReady) return;
+    api.resetSource(srcIdx).then(function (res) {
+      if (!res || res.error) {
+        toast(apiErrorMessage(res), "err");
+        return;
+      }
+      srcProxies.forEach(function (p) {
+        p.availability = 0; p.stability = 0; p.checks = 0;
+      });
       toast(t("statsReset"), "ok");
-      loadStatus();
+      return loadStatus();
+    }, function () {
+      toast(t("error"), "err");
+    }).finally(function () {
+      renderSources();
     });
   });
   row.appendChild(resetBtn);
@@ -716,36 +874,48 @@ function renderSourceRow(src, i) {
   delBtn.addEventListener("click", function () {
     if (confirm(t("confirmDelete"))) {
       state.sources.splice(i, 1);
-      state.proxies = state.proxies.filter(function (p) { return p.source !== i; });
-      state.proxies.forEach(function (p) { if (p.source > i) p.source--; });
-      state.dirty = true;
-      delete state.expanded[i];
-      var newExpanded = {};
-      Object.keys(state.expanded).forEach(function (k) {
-        var ki = parseInt(k, 10);
-        if (ki < i) newExpanded[ki] = state.expanded[k];
-        else if (ki > i) newExpanded[ki - 1] = state.expanded[k];
-      });
-      state.expanded = newExpanded;
-      ["sortKey", "sortDir", "pinging"].forEach(function (key) {
-        var newObj = {};
-        Object.keys(state[key]).forEach(function (k) {
-          var ki = parseInt(k, 10);
-          if (ki < i) newObj[ki] = state[key][k];
-          else if (ki > i) newObj[ki - 1] = state[key][k];
-        });
-        state[key] = newObj;
-      });
+      markSourcesDirty();
       renderSources();
     }
   });
   row.appendChild(delBtn);
+
+  var filterInput = el("input", {
+    type: "text",
+    id: "sl-exclude-" + i,
+    name: "sl_exclude_" + i,
+    "aria-label": t("excludeServers"),
+    class: "cbi-input-text sl-exclude-input",
+    placeholder: t("excludePlaceholder"),
+    title: t("excludeDesc"),
+    value: src.exclude || "",
+  });
+  if (state.busy) filterInput.disabled = true;
+  filterInput.addEventListener("input", function () {
+    src.exclude = filterInput.value;
+    src.filterDirty = true;
+    markSourcesDirty(true);
+    var wrapper = filterInput.closest ? filterInput.closest(".sl-source-wrapper") : null;
+    (wrapper || document).querySelectorAll(".sl-icon-btn, .sl-select-btn").forEach(function (btn) {
+      btn.disabled = true;
+    });
+    (wrapper || document).querySelectorAll(".sl-expand-btn").forEach(function (btn) {
+      btn.classList.add("sl-disabled");
+    });
+    var refreshBtn = document.querySelector(".sl-refresh-btn");
+    if (refreshBtn) refreshBtn.disabled = true;
+  });
+  var filterRow = el("div", { class: "sl-source-filter-row" }, [
+    el("span", { class: "sl-source-filter-label" }, [t("excludeServers")]),
+    filterInput,
+  ]);
 
   // Expandable VPN table
   var vpnDiv = el("div", { class: "sl-vpn-container" + (state.expanded[i] ? "" : " sl-hidden") });
   vpnDiv.setAttribute("data-vpn", String(i));
 
   expandBtn.addEventListener("click", function () {
+    if (!runtimeActionsReady) return;
     if (state.expanded[i]) {
       delete state.expanded[i];
       vpnDiv.classList.add("sl-hidden");
@@ -754,16 +924,24 @@ function renderSourceRow(src, i) {
       state.expanded[i] = true;
       vpnDiv.classList.remove("sl-hidden");
       expandBtn.textContent = "▾";
-      renderVpnTable(vpnDiv, srcProxies, i);
+      vpnDiv.innerHTML = "";
+      vpnDiv.appendChild(el("div", { class: "sl-empty" }, ["…"]));
+      nextFrame(function () {
+        if (state.expanded[i]) renderVpnTable(vpnDiv, srcProxies, i);
+      });
     }
   });
 
   if (state.expanded[i]) renderVpnTable(vpnDiv, srcProxies, i);
 
-  var wrapper = el("div", { class: "sl-source-wrapper", "data-idx": String(i) }, [row, vpnDiv]);
+  var wrapper = el("div", { class: "sl-source-wrapper", "data-idx": String(i) }, [row, filterRow, vpnDiv]);
 
   // Drag: only from handle
   dragHandle.addEventListener("dragstart", function (e) {
+    if (state.busy) {
+      e.preventDefault();
+      return;
+    }
     e.dataTransfer.setData("text/plain", String(i));
     e.dataTransfer.effectAllowed = "move";
     wrapper.classList.add("sl-dragging");
@@ -788,7 +966,7 @@ var dragState = {
   before: true,    // insert before target (true) or after (false)
 
   cleanup: function () {
-    if (this.rafId) { cancelAnimationFrame(this.rafId); this.rafId = 0; }
+    if (this.rafId) { cancelFrame(this.rafId); this.rafId = 0; }
     if (this.indicator) { this.indicator.remove(); this.indicator = null; }
     this.targetIdx = -1;
   },
@@ -817,11 +995,12 @@ function attachDragDrop(listEl) {
   var pendingEvent = null;
 
   listEl.addEventListener("dragover", function (e) {
+    if (state.busy) return;
     e.preventDefault();
     e.dataTransfer.dropEffect = "move";
     pendingEvent = e;
     if (!dragState.rafId) {
-      dragState.rafId = requestAnimationFrame(function () {
+      dragState.rafId = nextFrame(function () {
         dragState.rafId = 0;
         if (!pendingEvent) return;
         var ev = pendingEvent;
@@ -839,6 +1018,7 @@ function attachDragDrop(listEl) {
   });
 
   listEl.addEventListener("drop", function (e) {
+    if (state.busy) return;
     e.preventDefault();
     var fromIdx = parseInt(e.dataTransfer.getData("text/plain"), 10);
     dragState.cleanup();
@@ -856,7 +1036,7 @@ function attachDragDrop(listEl) {
     if (fromIdx < targetIdx) insertAt = targetIdx - 1;
     if (!isTop) insertAt = insertAt + 1;
     state.sources.splice(insertAt, 0, item);
-    state.dirty = true;
+    markSourcesDirty();
     renderSources();
   });
 
@@ -872,6 +1052,9 @@ function renderAddRow() {
 
   var urlInput = el("input", {
     type: "text",
+    id: "sl-add-url",
+    name: "sl_add_url",
+    "aria-label": t("addSource"),
     class: "cbi-input-text sl-add-url",
     placeholder: t("urlPlaceholder"),
     style: "height:39px !important; padding:8px 12px !important; box-sizing:border-box !important; font-size:1em !important;",
@@ -879,7 +1062,9 @@ function renderAddRow() {
   addRow.appendChild(urlInput);
 
   var addBtn = el("button", { class: "cbi-button cbi-button-add" }, [t("addSource")]);
+  if (state.busy) addBtn.disabled = true;
   addBtn.addEventListener("click", function () {
+    if (state.busy) return;
     var v = urlInput.value.trim();
     if (!v) return;
     var vl = v.toLowerCase();
@@ -892,8 +1077,8 @@ function renderAddRow() {
     if (state.sources.some(function (s) { return s.url === v; })) {
       toast(t("duplicateUrl"), "err"); return;
     }
-    state.sources.push({ url: v, last_update: 0 });
-    state.dirty = true;
+    state.sources.push({ url: v, last_update: 0, exclude: "", backendIndex: null, filterDirty: false });
+    markSourcesDirty();
     urlInput.value = "";
     renderSources();
   });
@@ -915,7 +1100,7 @@ function createTabs(settingsNode, sourcesNode, aboutNode) {
     }, [label]);
     tab.addEventListener("click", function () {
       state.activeTab = key;
-      localStorage.setItem("sl_active_tab", key);
+      storageSet("sl_active_tab", key);
       bar.querySelectorAll(".sl-tab").forEach(function (t2) { t2.classList.remove("sl-tab-active"); });
       tab.classList.add("sl-tab-active");
       cSettings.style.display = "none";
@@ -996,11 +1181,17 @@ var CSS = [
   "  box-shadow:0 0 6px rgba(0,163,204,0.6); pointer-events:none; }",
   ".sl-expand-btn { cursor:pointer; width:28px; text-align:center; user-select:none; font-size:2.8em; line-height:1; transition:transform 0.15s; }",
   ".sl-expand-btn:hover { color:#00a3cc; }",
+  ".sl-disabled { opacity:0.25; cursor:default !important; }",
   ".sl-source-url { flex:1; font-size:0.9em; word-break:break-all; cursor:pointer; transition:color 0.15s; }",
   ".sl-source-url:hover { color:#00a3cc; }",
   ".sl-server-count { opacity:0.6; font-size:0.85em; white-space:nowrap; }",
   ".sl-source-time { opacity:0.5; font-size:0.85em; white-space:nowrap; }",
   ".sl-priority { opacity:0.3; font-size:0.85em; white-space:nowrap; margin-left:auto; }",
+  ".sl-source-filter-row { display:flex; align-items:center; gap:8px; margin:-2px 0 7px 50px; }",
+  ".sl-source-filter-label { width:125px; flex:0 0 125px; opacity:0.55; font-size:0.85em; }",
+  ".sl-exclude-input { flex:1; min-width:0; padding:6px 10px !important; font-size:0.85em !important;",
+  "  box-sizing:border-box; height:32px !important; }",
+  ".sl-exclude-input::placeholder { color:currentColor; opacity:0.35; }",
 
   /* Icon buttons */
   ".sl-icon-btn { padding:2px 6px !important; font-size:0.9em !important; margin:0 !important; min-width:34px; text-align:center; }",
@@ -1020,6 +1211,7 @@ var CSS = [
   ".sl-th-active { opacity:1; font-weight:bold; }",
   ".sl-sort-arrow { font-size:0.8em; opacity:0.6; margin-left:2px; }",
   ".sl-row-selected td { background:rgba(92,184,92,0.25) !important; }",
+  ".sl-row-excluded td { opacity:0.5; }",
   ".sl-td-name { padding:5px 8px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }",
   ".sl-td-ping { padding:5px 8px; white-space:nowrap; width:70px; }",
   ".sl-td-metric { padding:5px 8px; white-space:nowrap; width:60px; }",
@@ -1063,8 +1255,8 @@ var CSS = [
   "#tab-content-settings .cbi-section-node { padding:0 !important; }",
   "#tab-content-settings table { font-size:0.9em; }",
   "#tab-content-settings .cbi-value { padding:3px 0 !important; align-items:flex-start !important; display:flex !important; }",
-  "#tab-content-settings .cbi-value-title { width:150px !important; flex-basis:150px !important; flex-grow:0 !important;",
-  "  flex-shrink:0 !important; min-width:150px !important; padding:11px 8px 0 0 !important; line-height:1.5 !important; font-size:0.9em; }",
+  "#tab-content-settings .cbi-value-title { width:220px !important; flex-basis:220px !important; flex-grow:0 !important;",
+  "  flex-shrink:0 !important; min-width:220px !important; padding:11px 14px 0 0 !important; line-height:1.5 !important; font-size:0.9em; }",
   "#tab-content-settings .cbi-value:has(.cbi-checkbox) .cbi-value-title { padding-top:2px !important; }",
   "#tab-content-settings .cbi-value-field { padding:2px 0 !important; margin:0 !important; flex:1; }",
   "#tab-content-settings .cbi-checkbox { line-height:0 !important; }",
@@ -1099,6 +1291,11 @@ var CSS = [
   ".sl-about-mem-row { padding:6px 0; }",
   ".sl-about-mem-label { display:flex; justify-content:space-between; font-size:0.9em; }",
   "@media(max-width:640px) { .sl-about-grid { grid-template-columns:1fr; } }",
+  "@media(max-width:700px) { #tab-content-settings .cbi-value { display:block !important; }",
+  "  #tab-content-settings .cbi-value-title { width:auto !important; min-width:0 !important; flex-basis:auto !important; padding:0 0 6px 0 !important; }",
+  "  #tab-content-settings input.cbi-input-text, #tab-content-settings .cbi-dropdown { width:100% !important; } }",
+  "@media(max-width:640px) { .sl-source-filter-row { margin-left:0; flex-direction:column; align-items:stretch; gap:4px; }",
+  "  .sl-source-filter-label { width:auto; flex:auto; } }",
 ];
 
 function injectCSS() {
@@ -1120,7 +1317,7 @@ var SmartlinkView = view.extend({
   render: function (data) {
     injectCSS();
 
-    state.sources = (data && data.sources && data.sources.sources) || [];
+    state.sources = prepareSources((data && data.sources && data.sources.sources) || []);
     state.proxies = (data && data.status && data.status.proxies) || [];
     state.current = (data && data.status && data.status.current) || null;
     state.lastUpdate = (data && data.status && data.status.last_update) || 0;
@@ -1132,14 +1329,16 @@ var SmartlinkView = view.extend({
     var o;
 
     // Group 1: General (3 fields)
-    o = s.option(form.ListValue, "update_interval", t("updateInterval"));
+    o = s.option(form.RichListValue, "update_interval", t("updateInterval"));
     o.value("30m", "30 " + (LANG === "ru" ? "мин" : "min"));
     o.value("1h", "1 " + (LANG === "ru" ? "ч" : "h"));
     o.value("3h", "3 " + (LANG === "ru" ? "ч" : "h"));
     o.value("6h", "6 " + (LANG === "ru" ? "ч" : "h"));
     o.value("12h", "12 " + (LANG === "ru" ? "ч" : "h"));
     o.value("24h", "24 " + (LANG === "ru" ? "ч" : "h"));
-    o.default = "6h"; o.rmempty = false;
+    o.value("3d", "3 " + (LANG === "ru" ? "д" : "d"));
+    o.value("7d", "7 " + (LANG === "ru" ? "д" : "d"));
+    o.default = "24h"; o.rmempty = false;
     o.description = t("updateIntervalDesc");
 
     o = s.option(form.Flag, "xhttp", t("xhttp"));
@@ -1151,34 +1350,59 @@ var SmartlinkView = view.extend({
     o.description = t("usePriorityDesc");
 
     // Group 2: Selected VPN (3 fields)
-    o = s.option(form.Value, "check_interval", t("checkInterval"));
+    o = s.option(form.RichListValue, "check_interval", t("checkInterval"));
+    o.value("5", "5 " + (LANG === "ru" ? "сек" : "sec"));
+    o.value("10", "10 " + (LANG === "ru" ? "сек" : "sec"));
+    o.value("15", "15 " + (LANG === "ru" ? "сек" : "sec"));
+    o.value("30", "30 " + (LANG === "ru" ? "сек" : "sec"));
+    o.value("60", "60 " + (LANG === "ru" ? "сек" : "sec"));
     o.default = "10"; o.rmempty = false;
-    o.datatype = "and(uinteger,min(5),max(300))";
     o.description = t("checkIntervalDesc");
 
-    o = s.option(form.Value, "max_ping", t("maxPing"));
+    o = s.option(form.RichListValue, "max_ping", t("maxPing"));
+    o.value("200", "200 " + t("ms"));
+    o.value("300", "300 " + t("ms"));
+    o.value("500", "500 " + t("ms"));
+    o.value("800", "800 " + t("ms"));
+    o.value("1000", "1000 " + t("ms"));
+    o.value("1500", "1500 " + t("ms"));
+    o.value("2000", "2000 " + t("ms"));
     o.default = "500"; o.rmempty = false;
-    o.datatype = "and(uinteger,min(50),max(5000))";
     o.description = t("maxPingDesc");
 
-    o = s.option(form.Value, "fail_count", t("failCount"));
+    o = s.option(form.RichListValue, "fail_count", t("failCount"));
+    o.value("1", "1 " + (LANG === "ru" ? "проблемы" : "failure"));
+    o.value("2", "2 " + (LANG === "ru" ? "проблем" : "failures"));
+    o.value("3", "3 " + (LANG === "ru" ? "проблем" : "failures"));
+    o.value("5", "5 " + (LANG === "ru" ? "проблем" : "failures"));
+    o.value("10", "10 " + (LANG === "ru" ? "проблем" : "failures"));
     o.default = "3"; o.rmempty = false;
-    o.datatype = "and(uinteger,min(1),max(20))";
     o.description = t("failCountDesc");
 
     // Group 3: All VPN (2 fields)
-    o = s.option(form.Value, "ping_all_interval", t("pingAllInterval"));
+    o = s.option(form.RichListValue, "ping_all_interval", t("pingAllInterval"));
+    o.value("60", "1 " + (LANG === "ru" ? "мин" : "min"));
+    o.value("300", "5 " + (LANG === "ru" ? "мин" : "min"));
+    o.value("900", "15 " + (LANG === "ru" ? "мин" : "min"));
+    o.value("1800", "30 " + (LANG === "ru" ? "мин" : "min"));
+    o.value("3600", "60 " + (LANG === "ru" ? "мин" : "min"));
     o.default = "60"; o.rmempty = false;
-    o.datatype = "and(uinteger,min(15),max(600))";
     o.description = t("pingAllIntervalDesc");
 
-    o = s.option(form.Value, "ping_timeout", t("pingTimeout"));
+    o = s.option(form.RichListValue, "ping_timeout", t("pingTimeout"));
+    o.value("400", "400 " + t("ms"));
+    o.value("500", "500 " + t("ms"));
+    o.value("600", "600 " + t("ms"));
+    o.value("800", "800 " + t("ms"));
+    o.value("1000", "1 " + (LANG === "ru" ? "сек" : "sec"));
+    o.value("2000", "2 " + (LANG === "ru" ? "сек" : "sec"));
+    o.value("3000", "3 " + (LANG === "ru" ? "сек" : "sec"));
+    o.value("4000", "4 " + (LANG === "ru" ? "сек" : "sec"));
     o.default = "2000"; o.rmempty = false;
-    o.datatype = "and(uinteger,min(500),max(30000))";
     o.description = t("pingTimeoutDesc");
 
     o = s.option(form.Value, "test_url", t("testUrl"));
-    o.default = "http://cp.cloudflare.com/"; o.rmempty = false;
+    o.default = "http://cp.cloudflare.com"; o.rmempty = false;
     o.description = t("testUrlDesc");
 
     // Sources container
@@ -1294,9 +1518,9 @@ var SmartlinkView = view.extend({
             ]),
           ]),
           el("div", { class: "sl-about-footer" }, [
-            el("a", { class: "sl-about-link", href: "https://github.com/CriDos/podkop-smartlink", target: "_blank" }, ["GitHub"]),
-            el("a", { class: "sl-about-link", href: "https://github.com/itdoginfo/podkop", target: "_blank" }, [t("aboutPodkop")]),
-            el("a", { class: "sl-about-link", href: "https://github.com/CriDos/podkop-smartlink/issues", target: "_blank" }, [t("aboutIssues")]),
+            el("a", { class: "sl-about-link", href: "https://github.com/CriDos/podkop-smartlink", target: "_blank", rel: "noopener noreferrer" }, ["GitHub"]),
+            el("a", { class: "sl-about-link", href: "https://github.com/itdoginfo/podkop", target: "_blank", rel: "noopener noreferrer" }, [t("aboutPodkop")]),
+            el("a", { class: "sl-about-link", href: "https://github.com/CriDos/podkop-smartlink/issues", target: "_blank", rel: "noopener noreferrer" }, [t("aboutIssues")]),
           ]),
         ]));
       });

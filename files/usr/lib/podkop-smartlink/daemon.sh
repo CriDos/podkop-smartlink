@@ -3,11 +3,10 @@
 # Cleanup on exit: persist current selection, remove locks, temp files.
 _sl_daemon_cleanup() {
     sl_cur_persist 2>/dev/null
-    rm -rf "${STATE_DIR}/sync.lock" 2>/dev/null
-    rm -f "${STATE_DIR}/refreshing" 2>/dev/null
+    [ -n "$SL_SYNC_LOCK_TOKEN" ] && sl_lock_release "$STATE_SYNC_LOCK" "$SL_SYNC_LOCK_TOKEN"
     rm -f "${STATE_PID}" 2>/dev/null
     rm -f "${STATE_DIR}"/stats.* "${STATE_DIR}"/keymap.* "${STATE_DIR}"/status_data.* 2>/dev/null
-    rm -f "${STATE_DIR}"/src_*.tmp 2>/dev/null
+    rm -f "${STATE_DIR}"/src_*.tmp "${STATE_DIR}"/*.excluded.work 2>/dev/null
     log "SmartLink daemon stopped" "info"
 }
 
@@ -53,19 +52,34 @@ sl_daemon_run() {
 
         # --- periodic subscription refresh ---
         # Skip if apply_changes is running in background
-        if [ -f "${STATE_DIR}/refreshing" ]; then
-            # Stale check: if refreshing file is older than 150s, remove it
+        if sl_refresh_active; then
+            # Stale check: if refresh lock is older than 150s, remove it
             local ref_age
-            ref_age=$(( now - $(date -r "${STATE_DIR}/refreshing" +%s 2>/dev/null || echo 0) ))
+            ref_age=$(( now - $(sl_safe_num "$(sl_file_mtime "$STATE_REFRESH_LOCK")") ))
             if [ "$ref_age" -gt 150 ]; then
-                log "Removing stale refreshing flag (age=${ref_age}s)" "warn"
-                rm -f "${STATE_DIR}/refreshing" 2>/dev/null
-                rm -rf "${STATE_DIR}/sync.lock" 2>/dev/null
+                log "Removing stale refresh lock (age=${ref_age}s)" "warn"
+                sl_refresh_finish "$(sl_refresh_token)"
             else
                 sleep 5
                 continue
             fi
         fi
+
+        if [ -z "$(sl_source_list)" ]; then
+            if sl_lock_active "$STATE_SYNC_LOCK"; then
+                sleep "$check_sec"
+                continue
+            fi
+            sl_sel_release_podkop "$SL_CFG_TARGET_SECTION" >/dev/null 2>&1 || true
+            rm -f "$STATE_LINKS_CACHE" "$STATE_LINKS_FULL" "$STATE_LINKS_EXCLUDED" "$STATE_TAGS_CACHE" \
+                "$STATE_LAST_PING" "$work" "${work}.excluded" 2>/dev/null
+            sl_cur_clear
+            fetch_fail_count=0
+            fetch_backoff=0
+            sleep "$check_sec"
+            continue
+        fi
+
         local update_sec since_update need_refresh
         update_sec="$(sl_interval_to_sec "$SL_CFG_UPDATE_INTERVAL")"
         since_update=$(( now - $(sl_safe_num "$(sl_last_update)") ))
@@ -106,26 +120,26 @@ sl_daemon_run() {
         [ "$display_interval" -lt 15 ] && display_interval=15
         since_display=$(( now - last_display_ping ))
         if [ "$last_display_ping" -gt 0 ] && [ "$since_display" -ge "$display_interval" ]; then
-            if [ ! -f "${STATE_DIR}/refreshing" ]; then
+            if ! sl_refresh_active; then
                 sl_sel_display_ping "$group_tag" "$full_links"
                 last_display_ping="$now"
             fi
         fi
 
         # --- ensure current selection is valid ---
-        if [ -f "${STATE_DIR}/refreshing" ]; then
+        if sl_refresh_active; then
             sleep 5
             continue
         fi
         if ! sl_sel_current_valid "$full_links" "$group_tag"; then
             log "No valid current selection, choosing by ping" "info"
-            # After reboot, pass saved URL for stickiness preference
-            local sticky_url=""
+            # After reboot, keep the last selected URL only if it is healthy.
+            local preferred_url=""
             if [ ! -f "$STATE_CURRENT" ]; then
-                sticky_url="$(uci -q get "$SL_NAME.main.last_selected" 2>/dev/null)"
+                preferred_url="$(uci -q get "$SL_NAME.main.last_selected" 2>/dev/null)"
             fi
-            if ! sl_sel_ping_all "$group_tag" "$full_links" "$sticky_url"; then
-                log "No alive servers, refreshing subscription" "warn"
+            if ! sl_sel_ping_all "$group_tag" "$full_links" "$preferred_url"; then
+                log "No healthy servers, refreshing subscription" "warn"
                 sl_sel_sync "$work"
                 [ -s "$STATE_LINKS_FULL" ] && full_links="$STATE_LINKS_FULL"
                 if sl_sel_ping_all "$group_tag" "$full_links"; then
@@ -134,7 +148,7 @@ sl_daemon_run() {
                     sleep "$check_sec"
                     continue
                 fi
-                log "No alive servers and no new links, waiting" "warn"
+                log "No healthy servers and no new links, waiting" "warn"
                 sleep "$((check_sec * 3))"
                 continue
             fi
@@ -145,7 +159,7 @@ sl_daemon_run() {
         fi
 
         # --- sticky health-check of current ---
-        if [ -f "${STATE_DIR}/refreshing" ]; then
+        if sl_refresh_active; then
             sleep 5
             continue
         fi
@@ -187,7 +201,7 @@ sl_daemon_run() {
             continue
         fi
 
-        # N failures reached — ping all and switch if alive exist
+        # N failures reached — ping all and switch only if healthy servers exist
         fail_count=0
         log "Fail threshold reached, pinging all" "info"
         if sl_sel_ping_all "$group_tag" "$full_links"; then
@@ -196,8 +210,8 @@ sl_daemon_run() {
             continue
         fi
 
-        # No alive — refresh subscription and retry once
-        log "No alive after full ping, refreshing subscription" "warn"
+        # No healthy servers — refresh subscription and retry once
+        log "No healthy servers after full ping, refreshing subscription" "warn"
         sl_sel_sync "$work"
         [ -s "$STATE_LINKS_FULL" ] && full_links="$STATE_LINKS_FULL"
         if sl_sel_ping_all "$group_tag" "$full_links"; then
