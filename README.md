@@ -20,12 +20,6 @@ wget -O - https://raw.githubusercontent.com/itdoginfo/podkop/refs/heads/main/ins
 wget -O - https://raw.githubusercontent.com/CriDos/podkop-smartlink/refs/heads/main/_install.sh | sh
 ```
 
-Dev-версия 1.1.0:
-
-```sh
-wget -O - https://raw.githubusercontent.com/CriDos/podkop-smartlink/refs/heads/dev/1.1.0/_install.sh | SMARTLINK_REPO=https://raw.githubusercontent.com/CriDos/podkop-smartlink/refs/heads/dev/1.1.0 sh
-```
-
 ## Удаление
 
 ```sh
