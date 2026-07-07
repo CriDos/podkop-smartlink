@@ -118,8 +118,11 @@ sl_daemon_run() {
         local display_interval since_display
         display_interval="$SL_CFG_PING_ALL_INTERVAL"
         [ "$display_interval" -lt 15 ] && display_interval=15
+        if [ "$last_display_ping" -eq 0 ]; then
+            last_display_ping="$now"
+        fi
         since_display=$(( now - last_display_ping ))
-        if [ "$last_display_ping" -gt 0 ] && [ "$since_display" -ge "$display_interval" ]; then
+        if [ "$since_display" -ge "$display_interval" ]; then
             if ! sl_refresh_active; then
                 sl_sel_display_ping "$group_tag" "$full_links"
                 last_display_ping="$now"

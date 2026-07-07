@@ -1,7 +1,7 @@
 # shellcheck disable=SC2034
 
 ## SmartLink
-SL_VERSION="1.1.0"
+SL_VERSION="1.1.1"
 SL_NAME="podkop-smartlink"
 
 # Podkop integration
