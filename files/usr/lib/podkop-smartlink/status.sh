@@ -109,7 +109,7 @@ sl_tags_get_valid() {
     tag_count="$(printf '%s\n' "$tags" | grep -c . 2>/dev/null || echo 0)"
     case "$tag_count" in *[!0-9]*) tag_count=0 ;; esac
     if [ "$tag_count" -ne "$link_count" ]; then
-        log "Ignoring outbound tags: count mismatch ($tag_count/$link_count)" "warn"
+        [ "${SL_TAGS_QUIET:-0}" = "1" ] || log "Ignoring outbound tags: count mismatch ($tag_count/$link_count)" "warn"
         return 1
     fi
 
@@ -118,7 +118,10 @@ sl_tags_get_valid() {
 }
 
 sl_tags_get_for_status() {
+    local old_quiet="${SL_TAGS_QUIET:-}"
+    SL_TAGS_QUIET=1
     sl_tags_get_valid "$1" "$2" 2>/dev/null || true
+    SL_TAGS_QUIET="$old_quiet"
 }
 
 # Update timestamps.

@@ -52,7 +52,7 @@ sl_cfg_load() {
     SL_CFG_FAIL_COUNT="$(sl_cfg_int fail_count "$DEFAULT_FAIL_COUNT")"
     SL_CFG_PING_TIMEOUT="$(sl_cfg_int ping_timeout "$DEFAULT_PING_TIMEOUT")"
     SL_CFG_TEST_URL="$(sl_cfg test_url "$DEFAULT_TEST_URL")"
-    SL_CFG_PING_ALL_INTERVAL="$(sl_cfg_int ping_all_interval "$DEFAULT_PING_ALL_INTERVAL")"
+    SL_CFG_STATS_PING_INTERVAL="$(sl_cfg_int ping_all_interval "$DEFAULT_STATS_PING_INTERVAL")"
     SL_CFG_XHTTP="$(sl_cfg_bool xhttp 0)"
     SL_CFG_USE_PRIORITY="$(sl_cfg_bool use_priority "$DEFAULT_USE_PRIORITY")"
 }

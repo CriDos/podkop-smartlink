@@ -15,7 +15,7 @@ sl_daemon_run() {
     local work="${STATE_DIR}/links.work"
 
     local fail_count=0
-    local last_display_ping=0
+    local last_stats_ping=0
     local last_detect=0
     local fetch_fail_count=0
     local fetch_backoff=0
@@ -114,18 +114,18 @@ sl_daemon_run() {
         local full_links="$STATE_LINKS_FULL"
         [ -s "$full_links" ] || { sleep "$check_sec"; continue; }
 
-        # --- periodic display ping (skip first iteration after boot) ---
-        local display_interval since_display
-        display_interval="$SL_CFG_PING_ALL_INTERVAL"
-        [ "$display_interval" -lt 15 ] && display_interval=15
-        if [ "$last_display_ping" -eq 0 ]; then
-            last_display_ping="$now"
+        # --- periodic Stats ping (skip first iteration after boot) ---
+        local stats_interval since_stats
+        stats_interval="$SL_CFG_STATS_PING_INTERVAL"
+        [ "$stats_interval" -lt 15 ] && stats_interval=15
+        if [ "$last_stats_ping" -eq 0 ]; then
+            last_stats_ping="$now"
         fi
-        since_display=$(( now - last_display_ping ))
-        if [ "$since_display" -ge "$display_interval" ]; then
+        since_stats=$(( now - last_stats_ping ))
+        if [ "$since_stats" -ge "$stats_interval" ]; then
             if ! sl_refresh_active; then
-                sl_sel_display_ping "$group_tag" "$full_links"
-                last_display_ping="$now"
+                sl_sel_stats_ping "$group_tag" "$full_links"
+                last_stats_ping="$now"
             fi
         fi
 
@@ -147,7 +147,7 @@ sl_daemon_run() {
                 [ -s "$STATE_LINKS_FULL" ] && full_links="$STATE_LINKS_FULL"
                 if sl_sel_ping_all "$group_tag" "$full_links"; then
                     fail_count=0
-                    last_display_ping="$now"
+                    last_stats_ping="$now"
                     sleep "$check_sec"
                     continue
                 fi
@@ -156,7 +156,7 @@ sl_daemon_run() {
                 continue
             fi
             fail_count=0
-            last_display_ping="$now"
+            last_stats_ping="$now"
             sleep "$check_sec"
             continue
         fi
@@ -185,7 +185,6 @@ sl_daemon_run() {
         if [ "$lat_ok" -eq 1 ]; then
             fail_count=0
             sl_hist_append "$cur_url" "$lat" 1
-            log "Current OK: ${lat}ms (threshold ${SL_CFG_MAX_PING})" "debug"
             # Sync group if it drifted (e.g. after reload)
             local group_now
             group_now="$(sl_clash_get_group_now "$group_tag" 2>/dev/null)"
@@ -197,9 +196,9 @@ sl_daemon_run() {
         # Current degraded or dead
         fail_count=$((fail_count + 1))
         sl_hist_append "$cur_url" "${lat:-}" 0
-        log "Current degraded/dead (fail $fail_count/$SL_CFG_FAIL_COUNT) lat=${lat:-none} threshold=$SL_CFG_MAX_PING" "warn"
 
         if [ "$fail_count" -lt "$SL_CFG_FAIL_COUNT" ]; then
+            log "Current check failed ($fail_count/$SL_CFG_FAIL_COUNT) lat=${lat:-none} threshold=${SL_CFG_MAX_PING}ms" "debug"
             sleep "$check_sec"
             continue
         fi
@@ -208,7 +207,7 @@ sl_daemon_run() {
         fail_count=0
         log "Fail threshold reached, pinging all" "info"
         if sl_sel_ping_all "$group_tag" "$full_links"; then
-            last_display_ping="$now"
+            last_stats_ping="$now"
             sleep "$check_sec"
             continue
         fi
@@ -218,7 +217,7 @@ sl_daemon_run() {
         sl_sel_sync "$work"
         [ -s "$STATE_LINKS_FULL" ] && full_links="$STATE_LINKS_FULL"
         if sl_sel_ping_all "$group_tag" "$full_links"; then
-            last_display_ping="$now"
+            last_stats_ping="$now"
             sleep "$check_sec"
             continue
         fi

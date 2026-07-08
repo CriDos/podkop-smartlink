@@ -120,7 +120,7 @@ _cmd_start_sync_job() {
             sl_clash_wait_ready 2>/dev/null
             group_tag="$(sl_clash_group_tag "$SL_CFG_TARGET_SECTION")"
             if sl_sel_current_valid "$STATE_LINKS_FULL" "$group_tag"; then
-                sl_sel_display_ping "$group_tag" "$STATE_LINKS_FULL"
+                sl_sel_stats_ping "$group_tag" "$STATE_LINKS_FULL"
             else
                 sl_sel_ping_all "$group_tag" "$STATE_LINKS_FULL" || true
             fi
@@ -526,6 +526,117 @@ cmd_reload() {
 cmd_show_config() { uci -q show "$SL_NAME" 2>/dev/null; }
 cmd_show_version() { echo "${SL_VERSION:-unknown}"; }
 
+# --- get_log [limit] ---
+cmd_get_log() {
+    local limit="${1:-400}" total tmp parsed_tmp entries_tmp all_mode=0 rc
+    if [ "$limit" = "all" ]; then
+        all_mode=1
+        limit=0
+    else
+        case "$limit" in ''|*[!0-9]*) limit=400 ;; esac
+        [ "$limit" -lt 50 ] && limit=50
+        [ "$limit" -gt 1000 ] && limit=1000
+    fi
+
+    mkdir -p "$STATE_DIR"
+    tmp="${STATE_DIR}/log.$$"
+    parsed_tmp="${STATE_DIR}/log.parsed.$$"
+    entries_tmp="${STATE_DIR}/log.entries.$$"
+    logread -e "$SL_NAME" > "$tmp" 2>/dev/null || : > "$tmp"
+
+    if ! awk -v name="$SL_NAME" '
+            BEGIN {
+                months["Jan"]="01"; months["Feb"]="02"; months["Mar"]="03"; months["Apr"]="04";
+                months["May"]="05"; months["Jun"]="06"; months["Jul"]="07"; months["Aug"]="08";
+                months["Sep"]="09"; months["Oct"]="10"; months["Nov"]="11"; months["Dec"]="12";
+                OFS = "\t";
+            }
+            function clean_level(v) {
+                v = tolower(v);
+                if (v == "err" || v == "crit" || v == "alert" || v == "emerg" || v == "fatal") return "error";
+                if (v == "warning") return "warn";
+                if (v == "notice" || v == "") return "info";
+                if (v == "debug" || v == "info" || v == "warn" || v == "error") return v;
+                return "info";
+            }
+            function compact(v) {
+                gsub(/^SmartLink daemon started \(section=/, "Daemon started (", v);
+                gsub(/^SmartLink daemon stopped$/, "Daemon stopped", v);
+                gsub(/^Current degraded\/dead /, "Current degraded ", v);
+                gsub(/^Fail threshold reached, pinging all$/, "Fail threshold reached, scanning servers", v);
+                gsub(/^No valid current selection, choosing by ping$/, "No valid current selection, scanning servers", v);
+                gsub(/^Reloading Podkop to apply /, "Reloading Podkop: ", v);
+                gsub(/ links$/, " links", v);
+                return v;
+            }
+            {
+                raw = $0;
+                date = ""; time = ""; level = ""; msg = raw;
+                if (NF >= 7 && ($2 in months)) {
+                    proc = $7;
+                    sub(/:.*/, "", proc);
+                    sub(/\[[^]]*\]$/, "", proc);
+                    if (proc != name) next;
+                    day = $3 + 0;
+                    date = sprintf("%02d.%s.%s", day, months[$2], $5);
+                    time = $4;
+                    level = $6;
+                    sub(/^.*\./, "", level);
+                    level = clean_level(level);
+                    msg = raw;
+                    for (i = 1; i <= 7; i++) sub(/^[^[:space:]]+[[:space:]]+/, "", msg);
+                }
+                if (msg ~ /^podkop-smartlink \[[^]]+\] /) sub(/^podkop-smartlink /, "", msg);
+                if (msg ~ /^\[[^]]+\] /) {
+                    inner = msg;
+                    sub(/^\[/, "", inner);
+                    sub(/\].*/, "", inner);
+                    level = clean_level(inner);
+                    sub(/^\[[^]]+\][[:space:]]*/, "", msg);
+                }
+                msg = compact(msg);
+                gsub(/\t/, " ", msg);
+                gsub(/\t/, " ", raw);
+                key = date "\t" time "\t" level "\t" msg;
+                if (key == prev) next;
+                prev = key;
+                print date, time, level, msg, raw;
+            }
+        ' "$tmp" > "$parsed_tmp"; then
+        : > "$parsed_tmp"
+    fi
+
+    total="$(wc -l < "$parsed_tmp" 2>/dev/null || echo 0)"
+    total="$(sl_safe_num "$total")"
+
+    if [ "$total" -le 0 ]; then
+        printf '[]' > "$entries_tmp"
+    else
+        if [ "$all_mode" -eq 1 ]; then
+            jq -R -s '
+                split("\n") | map(select(length > 0)) |
+                map(split("\t") | {date:.[0], time:.[1], level:.[2], message:.[3], raw:.[4]})
+            ' "$parsed_tmp" > "$entries_tmp" || printf '[]' > "$entries_tmp"
+        else
+            tail -n "$limit" "$parsed_tmp" 2>/dev/null | jq -R -s '
+                split("\n") | map(select(length > 0)) |
+                map(split("\t") | {date:.[0], time:.[1], level:.[2], message:.[3], raw:.[4]})
+            ' > "$entries_tmp" || printf '[]' > "$entries_tmp"
+        fi
+    fi
+    [ -s "$entries_tmp" ] || printf '[]' > "$entries_tmp"
+
+    jq -c -n \
+        --slurpfile entries "$entries_tmp" \
+        --argjson total "$total" \
+        --argjson limit "$limit" \
+        --argjson all "$all_mode" \
+        '{entries:$entries[0],total:$total,limit:$limit,all:($all==1),available:$total,count:($entries[0]|length)}'
+    rc=$?
+    rm -f "$tmp" "$parsed_tmp" "$entries_tmp"
+    return "$rc"
+}
+
 # --- get_info (system info for About section) ---
 cmd_get_info() {
     local sl_ver podkop_ver owrt_ver sb_ver uptime_str arch kernel loadavg mem_total mem_free
@@ -572,6 +683,7 @@ Commands:
     reset_stats         Reset all stability history + ping cache
     refresh_now         Force subscription refresh + apply if changed
     save_config         Commit UCI + restart/cleanup
+    get_log [limit|all] Print SmartLink log entries (JSON)
     show_config         Show current UCI configuration
     show_version        Show version
     get_info            Show system info (JSON)
@@ -596,6 +708,7 @@ save_config)          cmd_save_config ;;
 show_config)          cmd_show_config ;;
 show_version)         cmd_show_version ;;
 get_info)             cmd_get_info ;;
+get_log)              cmd_get_log "$2" ;;
 ""|-h|--help|help)    show_help ;;
 *) echo "Unknown command: $1" >&2; show_help >&2; exit 1 ;;
 esac

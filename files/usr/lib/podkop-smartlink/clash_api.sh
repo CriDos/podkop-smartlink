@@ -143,7 +143,7 @@ sl_clash_set_group() {
     code="$(_sl_clash_curl PUT "/proxies/${enc_group}" "$body" | tail -n1)"
 
     case "$code" in
-        204|200) log "Switched group '$group_tag' -> '$proxy_tag'" "info"; return 0 ;;
+        204|200) log "Switched group '$group_tag' -> '$proxy_tag'" "debug"; return 0 ;;
         404)     log "set_group: group '$group_tag' not found" "error"; return 1 ;;
         400)     log "set_group: proxy '$proxy_tag' not in group '$group_tag'" "error"; return 1 ;;
         *)       log "set_group failed (http $code)" "error"; return 1 ;;

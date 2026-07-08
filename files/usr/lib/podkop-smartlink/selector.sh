@@ -227,16 +227,16 @@ sl_sel_ping_all() {
     return $rc
 }
 
-# Background ping of ALL servers for dashboard display only.
+# Background Stats ping of ALL servers for dashboard/history only.
 # Saves results to STATE_LAST_PING and records history, does NOT switch.
 # Args: <group_tag> <links_file>
-sl_sel_display_ping() {
+sl_sel_stats_ping() {
     local group_tag="$1" links_file="$2"
-    local ping_file="${STATE_DIR}/ping.display.$$"
+    local ping_file="${STATE_DIR}/ping.stats.$$"
 
     # Batched parallel ping (sequential was too slow through NAT)
     if ! sl_clash_ping_group "$group_tag" "$ping_file" "$SL_CFG_PING_TIMEOUT" 0; then
-        log "Display ping: could not ping group" "debug"
+        log "Stats ping: could not ping group" "debug"
         rm -f "$ping_file"
         return 1
     fi
@@ -248,10 +248,7 @@ sl_sel_display_ping() {
     sl_sel_build_map "$group_tag" "$links_file" "$map_file"
     [ -s "$map_file" ] && sl_hist_record_pings "$ping_file" "$map_file"
 
-    local healthy_count
-    healthy_count="$(sl_sel_count_healthy "$ping_file" "$SL_CFG_MAX_PING")"
     rm -f "$ping_file" "$map_file"
-    log "Display ping: $SL_ALIVE_COUNT responded, $healthy_count healthy (threshold ${SL_CFG_MAX_PING}ms)" "debug"
     return 0
 }
 

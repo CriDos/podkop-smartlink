@@ -263,7 +263,7 @@ sl_sub_fetch_one() {
         fi
     done < "$dec_file"
 
-    [ "$skipped" -gt 0 ] && log "Filtered $skipped server(s) from subscription" "info"
+    [ "$skipped" -gt 0 ] && log "Filtered $skipped server(s) from subscription" "debug"
     rm -f "$raw_file" "$dec_file" "$norm_file"
     [ "$appended" -eq 1 ] && return 0
     return 2

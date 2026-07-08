@@ -13,29 +13,30 @@ var I18N = {
     tabSettings: "Настройки",
     general: "Основные",
     tabSources: "Подписки",
+    tabLog: "Лог",
     updateInterval: "Обновление подписок",
     updateIntervalDesc: "Как часто скачивать подписки и обновлять список серверов.",
     xhttp: "Расширенные транспорты",
     xhttpDesc: "Показывать XHTTP и другие новые типы подключений. Включайте, если ваш sing-box их поддерживает.",
     usePriority: "Учитывать порядок подписок",
     usePriorityDesc: "При автозамене выбирать из подписок выше по списку.",
-    selectedVpn: "Проверка сервера",
-    checkInterval: "Интервал проверки",
-    checkIntervalDesc: "Как часто проверять текущий сервер.",
+    selectedServerMonitoring: "Мониторинг выбранного сервера",
+    checkInterval: "Интервал",
+    checkIntervalDesc: "Как часто проверять выбранный сервер.",
     maxPing: "Максимальный пинг",
     maxPingDesc: "Если пинг выше, сервер считается проблемным.",
     failCount: "Менять после",
-    failCountDesc: "После скольких проблем подряд искать замену.",
-    allVpn: "Проверка серверов",
+    failCountDesc: "После скольких проблем подряд с пингом искать замену.",
+    statsPingGroup: "Статистика серверов",
     about: "Система",
     version: "Версия",
     uptime: "Аптайм",
-    pingAllInterval: "Интервал проверки",
-    pingAllIntervalDesc: "Как часто обновлять пинг и статистику таблицы.",
-    pingTimeout: "Ждать ответ до",
-    pingTimeoutDesc: "Сколько ждать ответ при проверке пинга.",
-    testUrl: "URL для проверки",
-    testUrlDesc: "Адрес для проверки доступности и задержки.",
+    statsPingInterval: "Интервал",
+    statsPingIntervalDesc: "Как часто фоново пинговать все серверы для таблицы. Не влияет на автопереключение.",
+    pingTimeout: "Таймаут",
+    pingTimeoutDesc: "Сколько ждать ответ от одного сервера при фоновом пинге.",
+    testUrl: "Тестовый URL",
+    testUrlDesc: "Адрес, который открывается через проверяемый сервер для измерения задержки.",
     noSources: "Нет подписок. Добавьте подписку или прямую ссылку ниже.",
     refreshSubs: "Обновить подписки",
     save: "Применить",
@@ -65,6 +66,18 @@ var I18N = {
     statsReset: "Статистика сброшена",
     proxySelected: "Выбран сервер",
     copied: "Скопировано",
+    logCopied: "Лог скопирован",
+    logRefresh: "Обновить",
+    logShowAll: "Показать всё",
+    logCopy: "Копировать",
+    logRaw: "Raw",
+    logAutoscroll: "Автоскролл",
+    logEmpty: "Записей нет",
+    logLines: "событий",
+    logLevelAll: "Все",
+    logLevelInfo: "Info+",
+    logLevelWarn: "Warn+",
+    logLevelError: "Error",
     refreshDone: "Подписки обновлены",
     refreshFailed: "Не удалось обновить подписки",
     totalServers: "Всего серверов",
@@ -93,29 +106,30 @@ var I18N = {
     tabSettings: "Settings",
     general: "General",
     tabSources: "Subscriptions",
+    tabLog: "Log",
     updateInterval: "Subscription update",
     updateIntervalDesc: "How often to reread subscriptions and update the server list.",
     xhttp: "New transports",
     xhttpDesc: "Keep links with newer transports, such as XHTTP. Requires sing-box extended.",
     usePriority: "Respect subscription order",
     usePriorityDesc: "When replacing a server, look for a healthy server in higher subscriptions first.",
-    selectedVpn: "Current server",
-    checkInterval: "Check every",
-    checkIntervalDesc: "How often to check the selected server. Select an interval in seconds.",
+    selectedServerMonitoring: "Selected server monitoring",
+    checkInterval: "Interval",
+    checkIntervalDesc: "How often to check the selected server.",
     maxPing: "Ping threshold",
     maxPingDesc: "A server is considered healthy while ping stays at or below this value. Select a threshold in milliseconds.",
     failCount: "Replace after",
-    failCountDesc: "How many failed checks in a row trigger replacement search.",
-    allVpn: "Background checks",
+    failCountDesc: "How many ping problems in a row trigger replacement search.",
+    statsPingGroup: "Server statistics",
     about: "System",
     version: "Version",
     uptime: "Uptime",
-    pingAllInterval: "Check list every",
-    pingAllIntervalDesc: "How often to refresh ping and statistics for all servers in the table. Select an interval in minutes.",
-    pingTimeout: "Check timeout",
-    pingTimeoutDesc: "How long to wait for a server response. Select a timeout in seconds.",
-    testUrl: "Check URL",
-    testUrlDesc: "URL opened through VPN to measure latency.",
+    statsPingInterval: "Interval",
+    statsPingIntervalDesc: "How often to ping all servers in the background for the table. Does not affect automatic failover.",
+    pingTimeout: "Timeout",
+    pingTimeoutDesc: "How long to wait for one server during background ping.",
+    testUrl: "Test URL",
+    testUrlDesc: "URL opened through the checked server to measure latency.",
     noSources: "No subscriptions. Add a subscription or direct link below.",
     refreshSubs: "Refresh subscriptions",
     save: "Apply",
@@ -145,6 +159,18 @@ var I18N = {
     statsReset: "Statistics reset",
     proxySelected: "Server selected",
     copied: "Copied",
+    logCopied: "Log copied",
+    logRefresh: "Refresh",
+    logShowAll: "Show all",
+    logCopy: "Copy",
+    logRaw: "Raw",
+    logAutoscroll: "Autoscroll",
+    logEmpty: "No log entries",
+    logLines: "events",
+    logLevelAll: "All",
+    logLevelInfo: "Info+",
+    logLevelWarn: "Warn+",
+    logLevelError: "Error",
     refreshDone: "Subscriptions refreshed",
     refreshFailed: "Failed to refresh subscriptions",
     totalServers: "Total servers",
@@ -217,6 +243,7 @@ var api = {
   },
   saveConfig: function () { return execCmd(WRITE_BIN, ["save_config"]); },
   getInfo: function () { return execCmd(READ_BIN, ["get_info"]); },
+  getLog: function (limit) { return execCmd(READ_BIN, ["get_log", limit || "400"]); },
 };
 
 /* ============================================================ */
@@ -239,6 +266,33 @@ function el(tag, attrs, children) {
     node.appendChild(typeof c === "string" ? document.createTextNode(c) : c);
   });
   return node;
+}
+
+function copyText(text) {
+  function fallback(resolve, reject) {
+    var ta = el("textarea", { class: "sl-copy-buffer" }, []);
+    ta.value = text;
+    document.body.appendChild(ta);
+    ta.select();
+    try {
+      if (document.execCommand("copy")) resolve();
+      else reject(new Error("copy_failed"));
+    } catch (e) {
+      reject(e);
+    } finally {
+      if (ta.parentNode) ta.parentNode.removeChild(ta);
+    }
+  }
+
+  return new Promise(function (resolve, reject) {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(resolve, function () {
+        fallback(resolve, reject);
+      });
+      return;
+    }
+    fallback(resolve, reject);
+  });
 }
 
 function setBusy(busy) {
@@ -338,9 +392,18 @@ var state = {
   dirty: false,  // local unsaved changes to sources
   needsApply: false,
   pendingHashes: [],
+  logEntries: [],
+  logMeta: null,
+  logLoaded: false,
+  logLoading: false,
+  logAllLoaded: false,
+  logRaw: storageGet("sl_log_raw", "0") === "1",
+  logLevel: storageGet("sl_log_level", "all"),
+  logAutoscroll: storageGet("sl_log_autoscroll", "1") !== "0",
 };
 
 var sourcesContainer = null;
+var logContainer = null;
 
 function prepareSources(list) {
   return (list || []).map(function (src, i) {
@@ -1087,10 +1150,216 @@ function renderAddRow() {
 }
 
 /* ============================================================ */
+/* Log tab                                                      */
+/* ============================================================ */
+
+function logLevelValue(level) {
+  switch (String(level || "info").toLowerCase()) {
+    case "debug": return 0;
+    case "warn":
+    case "warning": return 2;
+    case "error":
+    case "fatal":
+    case "crit":
+    case "alert":
+    case "emerg": return 3;
+    case "info":
+    case "notice":
+    default: return 1;
+  }
+}
+
+function logFilterValue() {
+  switch (state.logLevel) {
+    case "info": return 1;
+    case "warn": return 2;
+    case "error": return 3;
+    default: return -1;
+  }
+}
+
+function logEntryClass(entry) {
+  var v = logLevelValue(entry && entry.level);
+  if (v >= 3) return " sl-log-error";
+  if (v >= 2) return " sl-log-warn";
+  if (v <= 0) return " sl-log-debug";
+  return "";
+}
+
+function logVisibleEntries(entries) {
+  var list = entries || [];
+  var min = logFilterValue();
+  if (min < 0) return list;
+  return list.filter(function (entry) {
+    return logLevelValue(entry && entry.level) >= min;
+  });
+}
+
+function logEntryText(entry, raw) {
+  entry = entry || {};
+  if (raw) return entry.raw || [entry.time || "", entry.level || "", entry.message || ""].join(" ").trim();
+  return [entry.time || "--:--:--", entry.level || "info", entry.message || ""].join(" ");
+}
+
+function logEntriesText(entries, raw) {
+  var lines = [];
+  var lastDate = "";
+  (entries || []).forEach(function (entry) {
+    if (!raw && entry.date && entry.date !== lastDate) {
+      lines.push(entry.date);
+      lastDate = entry.date;
+    }
+    lines.push(logEntryText(entry, raw));
+  });
+  return lines.join("\n");
+}
+
+function setLogData(res) {
+  state.logEntries = res.entries || [];
+  state.logMeta = res;
+  state.logLoaded = true;
+  state.logAllLoaded = !!res.all;
+}
+
+function scrollLogToBottom() {
+  if (!logContainer || !state.logAutoscroll) return;
+  var win = logContainer.querySelector(".sl-log-window");
+  if (win) win.scrollTop = win.scrollHeight;
+}
+
+function loadLog(limit, keepScroll) {
+  if (!logContainer || state.logLoading) return Promise.resolve();
+  state.logLoading = true;
+  renderLog();
+  return api.getLog(limit).then(function (res) {
+    if (!res || res.error) {
+      toast(apiErrorMessage(res), "err");
+      return;
+    }
+    setLogData(res);
+  }, function () {
+    toast(t("error"), "err");
+  }).finally(function () {
+    state.logLoading = false;
+    renderLog();
+    if (!keepScroll) nextFrame(scrollLogToBottom);
+  });
+}
+
+function refreshLog(keepScroll) {
+  return loadLog(state.logAllLoaded ? "all" : "400", keepScroll);
+}
+
+function renderLog() {
+  if (!logContainer) return;
+  logContainer.innerHTML = "";
+
+  var toolbar = el("div", { class: "sl-log-toolbar" });
+  var loadedCount = state.logEntries.length || 0;
+  var visibleEntries = logVisibleEntries(state.logEntries);
+  var visibleCount = visibleEntries.length || 0;
+  var availableCount = state.logMeta ? Math.max(0, state.logMeta.available || 0) : loadedCount;
+  var metaCount = String(visibleCount);
+  if (visibleCount !== loadedCount) metaCount += "/" + String(loadedCount);
+  if (!state.logAllLoaded && availableCount > loadedCount) metaCount += "/" + String(availableCount);
+  var metaText = state.logLoading ? t("refreshing") : metaCount + " " + t("logLines");
+  toolbar.appendChild(el("span", { class: "sl-log-meta" }, [metaText]));
+
+  var levelSelect = el("select", { class: "sl-log-select" }, [
+    el("option", { value: "all" }, [t("logLevelAll")]),
+    el("option", { value: "info" }, [t("logLevelInfo")]),
+    el("option", { value: "warn" }, [t("logLevelWarn")]),
+    el("option", { value: "error" }, [t("logLevelError")]),
+  ]);
+  levelSelect.value = state.logLevel;
+  levelSelect.addEventListener("change", function () {
+    state.logLevel = levelSelect.value;
+    storageSet("sl_log_level", state.logLevel);
+    renderLog();
+  });
+  toolbar.appendChild(levelSelect);
+
+  var rawLabel = el("label", { class: "sl-log-toggle" }, [
+    el("input", { type: "checkbox", class: "sl-log-check" }),
+    el("span", {}, [t("logRaw")]),
+  ]);
+  var rawInput = rawLabel.querySelector("input");
+  rawInput.checked = state.logRaw;
+  rawInput.addEventListener("change", function () {
+    state.logRaw = rawInput.checked;
+    storageSet("sl_log_raw", state.logRaw ? "1" : "0");
+    renderLog();
+  });
+  toolbar.appendChild(rawLabel);
+
+  var autoLabel = el("label", { class: "sl-log-toggle" }, [
+    el("input", { type: "checkbox", class: "sl-log-check" }),
+    el("span", {}, [t("logAutoscroll")]),
+  ]);
+  var autoInput = autoLabel.querySelector("input");
+  autoInput.checked = state.logAutoscroll;
+  autoInput.addEventListener("change", function () {
+    state.logAutoscroll = autoInput.checked;
+    storageSet("sl_log_autoscroll", state.logAutoscroll ? "1" : "0");
+    if (state.logAutoscroll) scrollLogToBottom();
+  });
+  toolbar.appendChild(autoLabel);
+
+  var showAllBtn = el("button", { class: "cbi-button sl-log-btn" }, [t("logShowAll")]);
+  showAllBtn.disabled = state.logLoading || state.logAllLoaded || !state.logLoaded || availableCount <= loadedCount;
+  showAllBtn.addEventListener("click", function () { loadLog("all", false); });
+  toolbar.appendChild(showAllBtn);
+
+  var refreshBtn = el("button", { class: "cbi-button sl-log-btn" }, [t("logRefresh")]);
+  refreshBtn.disabled = state.logLoading;
+  refreshBtn.addEventListener("click", function () { refreshLog(false); });
+  toolbar.appendChild(refreshBtn);
+
+  var copyBtn = el("button", { class: "cbi-button sl-log-btn" }, [t("logCopy")]);
+  copyBtn.disabled = state.logLoading || !visibleEntries.length;
+  copyBtn.addEventListener("click", function () {
+    copyText(logEntriesText(visibleEntries, state.logRaw)).then(function () {
+      toast(t("logCopied"), "ok");
+    }, function () {
+      toast(t("error"), "err");
+    });
+  });
+  toolbar.appendChild(copyBtn);
+
+  var win = el("div", { class: "sl-log-window" });
+  if (state.logLoading && !loadedCount) {
+    win.appendChild(el("div", { class: "sl-log-empty" }, [t("refreshing")]));
+  } else if (!visibleEntries.length) {
+    win.appendChild(el("div", { class: "sl-log-empty" }, [t("logEmpty")]));
+  } else {
+    var lastDate = "";
+    visibleEntries.forEach(function (entry) {
+      if (!state.logRaw && entry.date && entry.date !== lastDate) {
+        win.appendChild(el("div", { class: "sl-log-date" }, [entry.date]));
+        lastDate = entry.date;
+      }
+      if (state.logRaw) {
+        win.appendChild(el("div", { class: "sl-log-line sl-log-raw" + logEntryClass(entry) }, [
+          logEntryText(entry, true),
+        ]));
+      } else {
+        win.appendChild(el("div", { class: "sl-log-line" + logEntryClass(entry) }, [
+          el("span", { class: "sl-log-time" }, [entry.time || "--:--:--"]),
+          el("span", { class: "sl-log-level" }, [entry.level || "info"]),
+          el("span", { class: "sl-log-message" }, [entry.message || ""]),
+        ]));
+      }
+    });
+  }
+
+  logContainer.appendChild(el("div", { class: "sl-section sl-log-section" }, [toolbar, win]));
+}
+
+/* ============================================================ */
 /* Tab system                                                   */
 /* ============================================================ */
 
-function createTabs(settingsNode, sourcesNode, aboutNode) {
+function createTabs(settingsNode, sourcesNode, logNode, aboutNode) {
   var wrap = el("div", {});
   var bar = el("div", { class: "sl-tabbar" });
 
@@ -1105,6 +1374,7 @@ function createTabs(settingsNode, sourcesNode, aboutNode) {
       tab.classList.add("sl-tab-active");
       cSettings.style.display = "none";
       cSources.style.display = "none";
+      cLog.style.display = "none";
       cAbout.style.display = "none";
       document.querySelectorAll(".cbi-page-actions").forEach(function (a) { a.style.display = "none"; });
       if (key === "settings") {
@@ -1112,6 +1382,9 @@ function createTabs(settingsNode, sourcesNode, aboutNode) {
         document.querySelectorAll(".cbi-page-actions").forEach(function (a) { a.style.display = ""; });
       } else if (key === "sources") {
         cSources.style.display = "";
+      } else if (key === "log") {
+        cLog.style.display = "";
+        if (!state.logLoaded) refreshLog(false);
       } else if (key === "about") {
         cAbout.style.display = "";
       }
@@ -1121,25 +1394,34 @@ function createTabs(settingsNode, sourcesNode, aboutNode) {
 
   var tabSettings = mkTab("settings", t("tabSettings"));
   var tabSources = mkTab("sources", t("tabSources"));
+  var tabLog = mkTab("log", t("tabLog"));
   var tabAbout = mkTab("about", t("about"));
   bar.appendChild(tabSettings);
   bar.appendChild(tabSources);
+  bar.appendChild(tabLog);
   bar.appendChild(tabAbout);
   wrap.appendChild(bar);
 
   var cSettings = el("div", { id: "tab-content-settings" }, [settingsNode]);
   var cSources = el("div", { id: "tab-content-sources", class: "sl-sources-tab" }, [sourcesNode]);
+  var cLog = el("div", { id: "tab-content-log", class: "sl-sources-tab" }, [logNode]);
   var cAbout = el("div", { id: "tab-content-about", class: "sl-sources-tab" }, [aboutNode]);
 
   cSettings.style.display = "none";
   cSources.style.display = "none";
+  cLog.style.display = "none";
   cAbout.style.display = "none";
   if (state.activeTab === "settings") cSettings.style.display = "";
   else if (state.activeTab === "sources") cSources.style.display = "";
+  else if (state.activeTab === "log") {
+    cLog.style.display = "";
+    nextFrame(function () { refreshLog(false); });
+  }
   else cAbout.style.display = "";
 
   wrap.appendChild(cSettings);
   wrap.appendChild(cSources);
+  wrap.appendChild(cLog);
   wrap.appendChild(cAbout);
 
   return wrap;
@@ -1151,7 +1433,7 @@ function createTabs(settingsNode, sourcesNode, aboutNode) {
 
 var CSS = [
   /* Base — unified font size, max-width, padding for all tabs */
-  "#tab-content-settings, #tab-content-sources, #tab-content-about { width:100%; margin:0; }",
+  "#tab-content-settings, #tab-content-sources, #tab-content-log, #tab-content-about { width:100%; margin:0; }",
   ".sl-sources-tab { padding:0; }",
 
   /* Tabs */
@@ -1250,6 +1532,7 @@ var CSS = [
   ".sl-toast-show { opacity:1; transform:translateY(0); }",
   ".sl-toast-ok { background:#5cb85c; }",
   ".sl-toast-err { background:#d9534f; }",
+  ".sl-copy-buffer { position:fixed; left:-9999px; top:-9999px; width:1px; height:1px; opacity:0; }",
 
   /* Settings tab */
   "#tab-content-settings .cbi-section-node { padding:0 !important; }",
@@ -1269,6 +1552,36 @@ var CSS = [
   ".sl-section-title { font-size:0.9em; font-weight:bold; margin:0 0 10px 0;",
   "  padding-bottom:8px; border-bottom:1px solid var(--cbi-color-border,#ccc); }",
   "#tab-content-settings .cbi-section { margin:0 !important; border:none !important; box-shadow:none !important; padding:0 !important; }",
+
+  /* Log tab */
+  ".sl-log-section { padding:0; overflow:hidden; }",
+  ".sl-log-toolbar { display:flex; align-items:center; flex-wrap:wrap; gap:8px; padding:10px 14px;",
+  "  border-bottom:1px solid var(--cbi-color-border,#ccc); }",
+  ".sl-log-meta { flex:1 1 130px; min-width:110px; opacity:0.65; font-size:0.9em; line-height:34px; }",
+  ".sl-log-select { height:34px !important; min-width:108px; max-width:130px; margin:0 !important;",
+  "  font-size:0.9em !important; line-height:34px !important; box-sizing:border-box; }",
+  ".sl-log-toggle { height:34px; display:inline-flex; align-items:center; gap:7px; padding:0 4px;",
+  "  margin:0; box-sizing:border-box; opacity:0.78; font-size:0.9em; line-height:1; white-space:nowrap; }",
+  ".sl-log-toggle span { display:inline-flex; align-items:center; height:18px; line-height:18px; }",
+  ".sl-log-check { position:static !important; width:16px !important; height:16px !important; min-width:16px;",
+  "  margin:0 !important; padding:0 !important; flex:0 0 16px; transform:none !important; vertical-align:middle; }",
+  ".sl-log-btn { height:34px !important; display:inline-flex !important; align-items:center; justify-content:center;",
+  "  padding:0 12px !important; font-size:0.9em !important; line-height:34px !important; margin:0 !important;",
+  "  min-width:96px; white-space:nowrap; box-sizing:border-box; }",
+  ".sl-log-window { height:min(62vh, 620px); min-height:360px; overflow:auto; padding:10px 12px;",
+  "  background:rgba(0,0,0,0.18); font-family:ui-monospace, SFMono-Regular, Consolas, 'Liberation Mono', monospace;",
+  "  font-size:12px; line-height:1.45; box-sizing:border-box; }",
+  ".sl-log-date { margin:8px 0 4px; opacity:0.5; font-weight:700; }",
+  ".sl-log-line { display:grid; grid-template-columns:72px 48px minmax(0,1fr); gap:8px;",
+  "  white-space:pre-wrap; word-break:break-word; padding:1px 0; color:inherit; opacity:0.9; }",
+  ".sl-log-raw { display:block; }",
+  ".sl-log-time { opacity:0.62; }",
+  ".sl-log-level { opacity:0.78; }",
+  ".sl-log-message { min-width:0; }",
+  ".sl-log-debug { opacity:0.58; }",
+  ".sl-log-warn { color:#f0ad4e; opacity:1; }",
+  ".sl-log-error { color:#d9534f; opacity:1; font-weight:600; }",
+  ".sl-log-empty { height:100%; display:flex; align-items:center; justify-content:center; opacity:0.5; font-size:0.95em; }",
 
   /* About tab */
   ".sl-about-grid { display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-top:14px; }",
@@ -1296,6 +1609,10 @@ var CSS = [
   "  #tab-content-settings input.cbi-input-text, #tab-content-settings .cbi-dropdown { width:100% !important; } }",
   "@media(max-width:640px) { .sl-source-filter-row { margin-left:0; flex-direction:column; align-items:stretch; gap:4px; }",
   "  .sl-source-filter-label { width:auto; flex:auto; } }",
+  "@media(max-width:640px) { .sl-log-meta { flex-basis:100%; line-height:20px; } .sl-log-select { flex:1; max-width:none; }",
+  "  .sl-log-toggle { flex:1 1 42%; padding:0; } .sl-log-btn { flex:1 1 42%; min-width:0; }",
+  "  .sl-log-window { min-height:320px; height:58vh; }",
+  "  .sl-log-line { grid-template-columns:64px 42px minmax(0,1fr); gap:6px; } }",
 ];
 
 function injectCSS() {
@@ -1364,9 +1681,9 @@ var SmartlinkView = view.extend({
     o.value("300", "300 " + t("ms"));
     o.value("500", "500 " + t("ms"));
     o.value("800", "800 " + t("ms"));
-    o.value("1000", "1000 " + t("ms"));
-    o.value("1500", "1500 " + t("ms"));
-    o.value("2000", "2000 " + t("ms"));
+    o.value("1000", "1 " + (LANG === "ru" ? "сек" : "sec"));
+    o.value("1500", LANG === "ru" ? "1,5 сек" : "1.5 sec");
+    o.value("2000", "2 " + (LANG === "ru" ? "сек" : "sec"));
     o.default = "500"; o.rmempty = false;
     o.description = t("maxPingDesc");
 
@@ -1379,15 +1696,15 @@ var SmartlinkView = view.extend({
     o.default = "3"; o.rmempty = false;
     o.description = t("failCountDesc");
 
-    // Group 3: All VPN (2 fields)
-    o = s.option(form.RichListValue, "ping_all_interval", t("pingAllInterval"));
+    // Group 3: Stats ping
+    o = s.option(form.RichListValue, "ping_all_interval", t("statsPingInterval"));
     o.value("60", "1 " + (LANG === "ru" ? "мин" : "min"));
     o.value("300", "5 " + (LANG === "ru" ? "мин" : "min"));
     o.value("900", "15 " + (LANG === "ru" ? "мин" : "min"));
     o.value("1800", "30 " + (LANG === "ru" ? "мин" : "min"));
     o.value("3600", "60 " + (LANG === "ru" ? "мин" : "min"));
-    o.default = "60"; o.rmempty = false;
-    o.description = t("pingAllIntervalDesc");
+    o.default = "300"; o.rmempty = false;
+    o.description = t("statsPingIntervalDesc");
 
     o = s.option(form.RichListValue, "ping_timeout", t("pingTimeout"));
     o.value("400", "400 " + t("ms"));
@@ -1408,14 +1725,16 @@ var SmartlinkView = view.extend({
     // Sources container
     sourcesContainer = el("div", {});
     renderSources();
+    logContainer = el("div", {});
+    renderLog();
 
     var node = el("div", {});
     return m.render().then(function (formEl) {
       // Group fields into cards via DOM post-processing
       var groups = [
         { title: t("general"), count: 3 },
-        { title: t("selectedVpn"), count: 3 },
-        { title: t("allVpn"), count: 3 },
+        { title: t("selectedServerMonitoring"), count: 3 },
+        { title: t("statsPingGroup"), count: 3 },
       ];
       var values = formEl.querySelectorAll(".cbi-value");
       if (values.length > 0) {
@@ -1525,7 +1844,7 @@ var SmartlinkView = view.extend({
         ]));
       });
 
-      var tabWrap = createTabs(formEl, sourcesContainer, aboutContainer);
+      var tabWrap = createTabs(formEl, sourcesContainer, logContainer, aboutContainer);
       node.appendChild(tabWrap);
 
       // Hide standard LuCI page actions if starting on Sources tab

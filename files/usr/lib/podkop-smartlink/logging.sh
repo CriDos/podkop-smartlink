@@ -6,6 +6,18 @@ log() {
     local level="${2:-info}"
     local tag="$SL_NAME"
 
+    if [ "$level" = "debug" ]; then
+        case "${SL_DEBUG:-0}" in
+            1|true|yes|on) ;;
+            *)
+                case "${SL_CFG_DEBUG:-0}" in
+                    1|true|yes|on) ;;
+                    *) return 0 ;;
+                esac
+                ;;
+        esac
+    fi
+
     local prio
     case "$level" in
         debug) prio=7 ;;
@@ -18,8 +30,8 @@ log() {
 
     logger -t "$tag" -p "$prio" "$message" 2>/dev/null
 
-    # Also echo to stdout/stderr when running interactively (CLI) or as procd daemon
-    if [ "$SL_DAEMON" = "1" ] || [ -t 1 ]; then
+    # Echo only for an interactive CLI. procd captures daemon stdout into syslog.
+    if [ -t 1 ]; then
         case "$level" in
             error|fatal) printf '%s [%s] %s\n' "$tag" "$level" "$message" >&2 ;;
             *)           printf '%s [%s] %s\n' "$tag" "$level" "$message" ;;
