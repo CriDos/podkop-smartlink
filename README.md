@@ -84,5 +84,5 @@ podkop-smartlink show_version        # версия
 sing-box с расширенными протоколами (xhttp и др.):
 
 ```sh
-wget -O - https://raw.githubusercontent.com/EikeiDev/OpenWRT-sing-box-extended/refs/heads/main/install.sh | sh
+sh <(wget -qO- https://raw.githubusercontent.com/EikeiDev/OpenWRT-sing-box-extended/refs/heads/main/install.sh)
 ```
