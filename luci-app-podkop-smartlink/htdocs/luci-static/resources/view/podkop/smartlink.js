@@ -426,6 +426,12 @@ function markSourcesDirty(keepOpen) {
   state.pinging = {};
 }
 
+function discardSourceDraft() {
+  state.dirty = false;
+  state.needsApply = false;
+  state.pendingHashes = [];
+}
+
 function refreshErrorMessage(st) {
   var rr = st && st.refresh_result;
   return (rr && rr.message) || t("refreshFailed");
@@ -723,7 +729,10 @@ function renderSources() {
     var attempts = 0;
     return new Promise(function (resolve, reject) {
       function poll() {
-        if (attempts++ > 60) {
+        // The backend allows up to 180s for a background job. Keep polling
+        // slightly longer than the old 90s window so a slow multi-source
+        // refresh is not mistaken for a failed transaction in the UI.
+        if (attempts++ > 120) {
           reject(new Error(t("refreshFailed")));
           return;
         }
@@ -772,17 +781,18 @@ function renderSources() {
     saveBtn.disabled = true; saveBtn.textContent = t("saving");
     api.saveSources(state.sources).then(function (res) {
       if (!res || res.error) {
+        discardSourceDraft();
         saveBtn.disabled = false; saveBtn.textContent = t("save");
-        toast(t("error"), "err");
+        toast(apiErrorMessage(res), "err");
         setBusy(false);
-        return;
+        return loadAll();
       }
       if (res.changed > 0) {
         state.needsApply = true;
         state.pendingHashes = res.changed_hashes || [];
       }
       if (res.changed === 0 && !state.needsApply) {
-        state.dirty = false;
+        discardSourceDraft();
         saveBtn.disabled = false; saveBtn.textContent = t("save");
         toast(t("saved"), "ok");
         setBusy(false);
@@ -794,13 +804,14 @@ function renderSources() {
       api.applyChanges(changedHashes).then(function (res) {
         if (!res || res.error) throw new Error(apiErrorMessage(res));
         return waitForRefresh().then(function () {
-          state.dirty = false;
-          state.needsApply = false;
-          state.pendingHashes = [];
+          discardSourceDraft();
           toast(t("saved"), "ok");
           return loadAll();
         });
       }).catch(function (err) {
+        // A failed apply rolls the backend source transaction back. Reload
+        // the committed list instead of keeping the rejected local edits.
+        discardSourceDraft();
         toast((err && err.message) || t("error"), "err");
         return loadAll();
       }).finally(function () {
@@ -808,9 +819,11 @@ function renderSources() {
         setBusy(false);
       });
     }, function () {
+      discardSourceDraft();
       saveBtn.disabled = false; saveBtn.textContent = t("save");
       toast(t("error"), "err");
       setBusy(false);
+      loadAll();
     });
   });
   bottomBar.appendChild(saveBtn);

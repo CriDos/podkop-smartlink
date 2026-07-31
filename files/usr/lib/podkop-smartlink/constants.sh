@@ -1,7 +1,7 @@
 # shellcheck disable=SC2034
 
 ## SmartLink
-SL_VERSION="1.2.0"
+SL_VERSION="1.2.2"
 SL_NAME="podkop-smartlink"
 
 # Podkop integration
@@ -25,6 +25,9 @@ STATE_SUB_CACHE="$STATE_DIR/sub_cache"
 STATE_SYNC_LOCK="$STATE_DIR/sync.lock"
 STATE_REFRESH_LOCK="$STATE_DIR/refresh.lock"
 STATE_REFRESH_RESULT="$STATE_DIR/refresh_result"
+# Persistent rollback snapshot for a source edit awaiting successful apply.
+STATE_SOURCE_TXN="/etc/podkop-smartlink.source-txn"
+STATE_SOURCE_TXN_COMMITTED="${STATE_SOURCE_TXN}.committed"
 
 # Clash API (sing-box experimental clash_api)
 CLASH_API_PORT=9090

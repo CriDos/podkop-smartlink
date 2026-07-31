@@ -32,6 +32,85 @@ sl_sub_normalize_scheme() {
     esac
 }
 
+# Make VLESS UDP packet encoding explicit for Podkop-generated outbounds.
+# Keep an explicitly supplied value untouched; only add xudp when the
+# subscription omitted packetEncoding entirely. The parameter belongs before
+# the URL fragment so it is parsed as a query option by Podkop.
+sl_sub_ensure_packet_encoding() {
+    local url="$1" base fragment query prefix token key value new_query has_param
+    case "$url" in
+        vless://*) ;;
+        *) printf '%s' "$url"; return 0 ;;
+    esac
+
+    case "$url" in
+        *\#*)
+            base="${url%%#*}"
+            fragment="#${url#*#}"
+            ;;
+        *)
+            base="$url"
+            fragment=""
+            ;;
+    esac
+
+    case "$base" in
+        *\?*)
+            prefix="${base%%\?*}"
+            query="${base#*\?}"
+            ;;
+        *)
+            printf '%s?packetEncoding=xudp%s' "$base" "$fragment"
+            return 0
+    esac
+
+    new_query=""
+    has_param=0
+    # Read tokens line-by-line so shell pathname expansion cannot rewrite a
+    # query value containing wildcard characters.
+    while IFS= read -r token || [ -n "$token" ]; do
+        key="${token%%=*}"
+        value=""
+        case "$token" in
+            *=*) value="${token#*=}" ;;
+        esac
+        if [ "$key" = "packetEncoding" ]; then
+            has_param=1
+            [ -n "$value" ] || token="packetEncoding=xudp"
+        fi
+        if [ -n "$new_query" ]; then
+            new_query="${new_query}&${token}"
+        else
+            new_query="$token"
+        fi
+    done <<EOF
+$(printf '%s' "$query" | tr '&' '\n')
+EOF
+
+    if [ "$has_param" -eq 0 ]; then
+        [ -n "$new_query" ] && new_query="${new_query}&"
+        new_query="${new_query}packetEncoding=xudp"
+    fi
+
+    printf '%s?%s%s' "$prefix" "$new_query" "$fragment"
+}
+
+# Normalize cached subscription entries after the parser behavior changes.
+# Cache files contain URL/title/host fields and are otherwise reused without
+# passing through sl_sub_process_link again.
+sl_sub_cache_normalize() {
+    local cache_file="$1" tmp url title host
+    [ -s "$cache_file" ] || return 0
+    tmp="${cache_file}.normalize.$$"
+    : > "$tmp" || return 1
+    while IFS="$TAB" read -r url title host; do
+        [ -n "$url" ] || continue
+        url="$(sl_sub_ensure_packet_encoding "$url")"
+        printf '%s\t%s\t%s\n' "$url" "$title" "$host" >> "$tmp"
+    done < "$cache_file"
+    mv "$tmp" "$cache_file" 2>/dev/null || { rm -f "$tmp"; return 1; }
+}
+
 # Extract the fragment (title) from a proxy URL, after the first '#'.
 # Decoded, sanitized (tabs/newlines -> spaces).
 sl_sub_extract_title() {
@@ -162,6 +241,7 @@ sl_sub_transport_supported() {
 sl_sub_process_link() {
     local url="$1" out_file="$2" idx="$3" src_idx="$4" resolve_cache="$5"
     url="$(sl_sub_normalize_scheme "$(sl_sub_normalize_url "$url")")"
+    url="$(sl_sub_ensure_packet_encoding "$url")"
     sl_sub_is_supported "$url" || return 1
     local title host
     title="$(sl_sub_extract_title "$url" "Config $idx")"
@@ -200,6 +280,7 @@ sl_sub_apply_user_filter_file() {
     while IFS= read -r line || [ -n "$line" ]; do
         [ -z "$line" ] && continue
         url="$(printf '%s' "$line" | cut -f1)"
+        url="$(sl_sub_ensure_packet_encoding "$url")"
         title="$(printf '%s' "$line" | cut -f2)"
         host="$(printf '%s' "$line" | cut -f3)"
         src_idx="$(printf '%s' "$line" | cut -f4)"
@@ -374,6 +455,9 @@ sl_sub_rebuild() {
                 rm -f "$src_tmp"
             elif [ -s "$cache_file" ]; then
                 # Use cache, don't re-download
+                sl_sub_cache_normalize "$cache_file" || {
+                    log "Failed to normalize subscription cache: $line" "warn"
+                }
                 local cache_tmp="${STATE_DIR}/cache_${url_hash}.$$"
                 awk -v si="$src_idx" -F "$TAB" '{print $1"\t"$2"\t"$3"\t"si}' "$cache_file" > "$cache_tmp"
                 sl_sub_apply_user_filter_file "$cache_tmp" "$work" "$excluded_work" "$exclude_filter"

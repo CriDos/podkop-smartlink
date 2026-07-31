@@ -46,6 +46,132 @@ _refresh_safety_timeout() {
     ) </dev/null >/dev/null 2>&1 &
 }
 
+# Source edits are committed to UCI before the asynchronous subscription
+# fetch. Keep the previous URL/filter records until that fetch and Podkop
+# apply both succeed, so a bad subscription cannot replace a working one.
+_source_txn_active() {
+    [ -f "$STATE_SOURCE_TXN" ] || [ -f "$STATE_SOURCE_TXN_COMMITTED" ]
+}
+
+_source_txn_committed() {
+    [ -f "$STATE_SOURCE_TXN_COMMITTED" ]
+}
+
+_source_txn_begin() {
+    local old_records="$1" tmp="${STATE_SOURCE_TXN}.$$"
+    _source_txn_active && return 1
+    cp "$old_records" "$tmp" 2>/dev/null || { rm -f "$tmp"; return 1; }
+    chmod 600 "$tmp" 2>/dev/null || true
+    mv "$tmp" "$STATE_SOURCE_TXN" 2>/dev/null || {
+        rm -f "$tmp"
+        return 1
+    }
+    return 0
+}
+
+_source_txn_remove() {
+    rm -f "$STATE_SOURCE_TXN" "${STATE_SOURCE_TXN}".* 2>/dev/null
+}
+
+_source_txn_mark_committed() {
+    local tmp="${STATE_SOURCE_TXN_COMMITTED}.$$"
+    : > "$tmp" 2>/dev/null || { rm -f "$tmp"; return 1; }
+    chmod 600 "$tmp" 2>/dev/null || true
+    mv "$tmp" "$STATE_SOURCE_TXN_COMMITTED" 2>/dev/null || {
+        rm -f "$tmp"
+        return 1
+    }
+    return 0
+}
+
+_source_txn_commit() {
+    _source_txn_active || return 0
+    local lock_token cleanup_rc
+    if ! _source_txn_committed && ! _source_txn_mark_committed; then
+        log "Cannot mark source transaction committed" "error"
+        return 1
+    fi
+    lock_token="$(sl_lock_acquire "$STATE_SYNC_LOCK" 10)" || {
+        # The committed marker prevents a later restart from rolling back a
+        # source list that was already applied. Cleanup can be retried later.
+        log "Cannot lock source state for commit; cleanup deferred" "warn"
+        return 0
+    }
+    # Remove the rollback marker before best-effort stale-cache cleanup. If
+    # power fails during cleanup, the successfully applied source list must
+    # not be rolled back on the next boot.
+    _source_txn_remove
+    if _source_txn_active; then
+        sl_lock_release "$STATE_SYNC_LOCK" "$lock_token"
+        log "Cannot clear source transaction marker after commit" "error"
+        # The committed marker is still present, so recovery will retry the
+        # cleanup path instead of rolling back the applied source list.
+        return 0
+    fi
+    _sources_cleanup_stale_state "$(_sources_valid_hashes_for_current_sources)"
+    cleanup_rc=$?
+    sl_lock_release "$STATE_SYNC_LOCK" "$lock_token"
+    [ "$cleanup_rc" -eq 0 ] || log "Stale source state cleanup failed after commit" "warn"
+    log "Source transaction committed" "debug"
+    return 0
+}
+
+_source_txn_rollback() {
+    _source_txn_active || return 0
+    if _source_txn_committed; then
+        _source_txn_commit
+        return $?
+    fi
+    local restore="${STATE_SOURCE_TXN}.restore.$$" lock_token cleanup_rc
+    lock_token="$(sl_lock_acquire "$STATE_SYNC_LOCK" 10)" || {
+        log "Cannot lock source state for rollback" "error"
+        return 1
+    }
+    if ! cp "$STATE_SOURCE_TXN" "$restore" 2>/dev/null; then
+        sl_lock_release "$STATE_SYNC_LOCK" "$lock_token"
+        log "Cannot read source transaction rollback snapshot" "error"
+        return 1
+    fi
+    if _sources_write_uci "$restore"; then
+        rm -f "$restore"
+        # Preserve the old per-source cache and remove only state from the
+        # rejected source list, if any was created before the failure.
+        _sources_cleanup_stale_state "$(_sources_valid_hashes_for_current_sources)"
+        cleanup_rc=$?
+        [ "$cleanup_rc" -eq 0 ] && _source_txn_remove
+        sl_lock_release "$STATE_SYNC_LOCK" "$lock_token"
+        [ "$cleanup_rc" -eq 0 ] || {
+            log "Stale source state cleanup failed after rollback" "error"
+            return 1
+        }
+        _source_txn_active && {
+            log "Cannot clear source transaction marker after rollback" "error"
+            return 1
+        }
+        log "Source transaction rolled back after failed apply" "warn"
+        return 0
+    fi
+    rm -f "$restore"
+    sl_lock_release "$STATE_SYNC_LOCK" "$lock_token"
+    log "Cannot restore source list after failed apply" "error"
+    return 1
+}
+
+_source_txn_recover() {
+    _source_txn_active || return 0
+    if sl_refresh_active; then
+        log "Pending source transaction found while refresh is active" "warn"
+        return 0
+    fi
+    if _source_txn_committed; then
+        log "Finishing committed source transaction" "warn"
+        _source_txn_commit
+    else
+        log "Recovering unfinished source transaction" "warn"
+        _source_txn_rollback
+    fi
+}
+
 _sync_result_set() {
     local sync_rc="$1" ok_message="$2" fetch_failed_message="$3"
     case "$sync_rc" in
@@ -76,10 +202,17 @@ _cmd_start_sync_job() {
 
     if [ -z "$(sl_source_list)" ]; then
         if _cmd_clear_no_sources_state; then
-            sl_refresh_result_set true "ok" "$ok_message"
+            if _source_txn_commit; then
+                sl_refresh_result_set true "ok" "$ok_message"
+                echo '{"refreshing":false}'
+                return 0
+            fi
+            _source_txn_rollback
+            sl_refresh_result_set false "apply_failed" "Source transaction commit failed"
             echo '{"refreshing":false}'
-            return 0
+            return 1
         fi
+        _source_txn_rollback
         sl_refresh_result_set false "apply_failed" "Podkop release failed"
         echo '{"refreshing":false}'
         return 1
@@ -126,6 +259,14 @@ _cmd_start_sync_job() {
             fi
         fi
 
+        if [ "$sync_rc" -eq 0 ]; then
+            if ! _source_txn_commit; then
+                _source_txn_rollback
+                sync_rc=2
+            fi
+        else
+            _source_txn_rollback
+        fi
         _sync_result_set "$sync_rc" "$ok_message" "$fetch_failed_message"
         _sync_job_cleanup
     ) </dev/null >/dev/null 2>&1 &
@@ -321,6 +462,17 @@ EOF
     printf '%s' "$valid_hashes"
 }
 
+_sources_valid_hashes_for_current_sources() {
+    local line valid_hashes=""
+    while IFS= read -r line; do
+        [ -n "$line" ] || continue
+        valid_hashes="${valid_hashes}$(sl_sub_hash "$line") "
+    done <<EOF
+$(sl_source_list)
+EOF
+    printf '%s' "$valid_hashes"
+}
+
 _sources_cleanup_stale_state() {
     local valid_hashes="$1" line tk cf base
     for cf in "${STATE_SUB_CACHE}"/sub_*; do
@@ -346,7 +498,8 @@ _sources_cleanup_stale_state() {
 }
 
 # --- save_sources (JSON arg with url list) ---
-# Smart: only clears sub caches for indices where URL changed.
+# Save the source list as a transaction; cache cleanup is deferred until the
+# corresponding asynchronous rebuild succeeds.
 # Returns {"saved":true,"changed":N} where N = number of changed sources.
 cmd_save_sources() {
     local input="$1"
@@ -362,6 +515,12 @@ cmd_save_sources() {
         *) rm -f "$records_file"; echo '{"error":"invalid_sources"}'; return 1 ;;
     esac
 
+    if sl_refresh_active; then
+        rm -f "$records_file"
+        echo '{"error":"busy"}'
+        return 1
+    fi
+
     local lock_token
     lock_token="$(sl_lock_acquire "$STATE_SYNC_LOCK" 10)" || {
         rm -f "$records_file"
@@ -369,32 +528,53 @@ cmd_save_sources() {
         return 1
     }
 
+    if _source_txn_active; then
+        sl_lock_release "$STATE_SYNC_LOCK" "$lock_token"
+        rm -f "$records_file"
+        echo '{"error":"busy"}'
+        return 1
+    fi
+
     # Read old sources before modifying
     local old_sources old_records_file
     old_sources="$(sl_source_list)"
     old_records_file="${STATE_DIR}/sources_old.$$"
     _sources_old_records "$old_sources" "$old_records_file"
 
-    if ! _sources_write_uci "$records_file"; then
-        uci -q revert "$SL_NAME" 2>/dev/null || true
-        sl_lock_release "$STATE_SYNC_LOCK" "$lock_token"
-        rm -f "$records_file" "$old_records_file"
-        echo '{"error":"uci_failed"}'
-        return 1
-    fi
-    local new_arr change_info changed changed_hashes
-    new_arr="$(cut -f1 "$records_file" 2>/dev/null)"
+    local change_info changed changed_hashes
     change_info="$(_sources_calc_changes "$records_file" "$old_records_file" "$old_sources")"
     changed="$(printf '%s' "$change_info" | cut -f1)"
     changed_hashes="$(printf '%s' "$change_info" | cut -f2)"
 
-    _sources_cleanup_stale_state "$(_sources_valid_hashes "$records_file")"
-
-    if [ "$changed" -gt 0 ]; then
-        rm -f "$STATE_LINKS_CACHE" 2>/dev/null
+    if [ "$changed" -eq 0 ]; then
+        sl_lock_release "$STATE_SYNC_LOCK" "$lock_token"
+        rm -f "$records_file" "$old_records_file"
+        printf '{"saved":true,"changed":0,"changed_hashes":[]}'
+        return 0
     fi
-    if [ -z "$new_arr" ]; then
-        _cmd_clear_no_sources_state || true
+
+    # Re-check after taking the source lock. A daemon refresh may have
+    # started between the first check and lock acquisition.
+    if sl_refresh_active || _source_txn_active; then
+        sl_lock_release "$STATE_SYNC_LOCK" "$lock_token"
+        rm -f "$records_file" "$old_records_file"
+        echo '{"error":"busy"}'
+        return 1
+    fi
+
+    if ! _source_txn_begin "$old_records_file"; then
+        sl_lock_release "$STATE_SYNC_LOCK" "$lock_token"
+        rm -f "$records_file" "$old_records_file"
+        echo '{"error":"transaction_failed"}'
+        return 1
+    fi
+
+    if ! _sources_write_uci "$records_file"; then
+        sl_lock_release "$STATE_SYNC_LOCK" "$lock_token"
+        _source_txn_rollback
+        rm -f "$records_file" "$old_records_file"
+        echo '{"error":"uci_failed"}'
+        return 1
     fi
 
     # Build JSON array of changed hashes (strings)
@@ -497,6 +677,8 @@ cmd_save_config() {
 # --- daemon ---
 cmd_daemon() {
     SL_DAEMON=1
+    mkdir -p "$STATE_DIR" "$STATE_HISTORY_DIR"
+    _source_txn_recover
     sl_cfg_load
     echo $$ > "$STATE_PID"
     sl_daemon_run

@@ -35,6 +35,9 @@ sl_daemon_run() {
 
     while :; do
         sl_cfg_load
+        if _source_txn_active && ! sl_refresh_active; then
+            _source_txn_recover
+        fi
         check_sec="${SL_CFG_CHECK_INTERVAL:-10}"
         [ "$check_sec" -lt 5 ] && check_sec=5
         local now

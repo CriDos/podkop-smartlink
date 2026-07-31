@@ -179,6 +179,7 @@ rm -f /usr/share/rpcd/acl.d/luci-app-podkop-smartlink.json
 # ---- state ----
 echo "Removing state..."
 rm -rf /tmp/podkop-smartlink
+rm -f /etc/podkop-smartlink.source-txn*
 
 # Refresh rpcd
 /etc/init.d/rpcd reload >/dev/null 2>&1 || true

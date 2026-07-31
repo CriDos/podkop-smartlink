@@ -1,4 +1,4 @@
-# podkop-smartlink v1.2.0
+# podkop-smartlink v1.2.2
 
 > Следит за VPN-подписками, проверяет сервера и держит [Podkop](https://github.com/itdoginfo/podkop) на рабочем подключении. При проблемах автоматически выбирает здоровую замену.
 
