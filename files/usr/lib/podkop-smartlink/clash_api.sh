@@ -182,7 +182,7 @@ _sl_clash_ping_collect() {
 # Args: <out_file> <timeout_ms> <tags_file>
 # File format: "<latency_or_empty>\t<tag>" per line (alive sorted by latency, dead after).
 # Sets: SL_ALIVE_COUNT
-SL_PING_BATCH=10
+SL_PING_BATCH=20
 
 sl_clash_ping_tags_file() {
     local out_file="$1" timeout="$2" tags_file="$3"

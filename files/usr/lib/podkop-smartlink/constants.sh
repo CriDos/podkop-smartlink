@@ -1,7 +1,7 @@
 # shellcheck disable=SC2034
 
 ## SmartLink
-SL_VERSION="1.2.2"
+SL_VERSION="1.2.3"
 SL_NAME="podkop-smartlink"
 
 # Podkop integration
@@ -31,7 +31,7 @@ STATE_SOURCE_TXN_COMMITTED="${STATE_SOURCE_TXN}.committed"
 
 # Clash API (sing-box experimental clash_api)
 CLASH_API_PORT=9090
-CLASH_API_READY_MAX_WAIT=60
+CLASH_API_READY_MAX_WAIT=90
 CLASH_API_READY_POLL=1
 
 # Defaults

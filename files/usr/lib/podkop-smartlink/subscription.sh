@@ -8,10 +8,21 @@ sl_sub_hash() {
 }
 
 # Check if a URL is a supported proxy link (case-insensitive scheme).
+# The common path (already lowercased scheme) needs no subprocess.
 sl_sub_is_supported() {
-    case "$(printf '%s' "$1" | tr 'A-Z' 'a-z')" in
-        vless://*|ss://*|trojan://*|hy2://*|hysteria2://*|socks://*|socks4://*|socks5://*)
-            return 0 ;;
+    local scheme
+    case "$1" in
+        *://*) ;;
+        *) return 1 ;;
+    esac
+    scheme="${1%%://*}"
+    case "$scheme" in
+        vless|ss|trojan|hy2|hysteria2|socks|socks4|socks5) return 0 ;;
+        *[A-Z]*) ;;
+        *) return 1 ;;
+    esac
+    case "$(printf '%s' "$scheme" | tr 'A-Z' 'a-z')" in
+        vless|ss|trojan|hy2|hysteria2|socks|socks4|socks5) return 0 ;;
     esac
     return 1
 }
@@ -101,6 +112,14 @@ EOF
 sl_sub_cache_normalize() {
     local cache_file="$1" tmp url title host
     [ -s "$cache_file" ] || return 0
+    # Rewriting is only needed for vless links without a packetEncoding value;
+    # skip the per-line rewrite entirely when there are none.
+    if ! awk -F "$TAB" '
+        $1 ~ /^vless:\/\// && $1 !~ /packetEncoding=[^&]/ { found = 1; exit }
+        END { exit !found }
+    ' "$cache_file" 2>/dev/null; then
+        return 0
+    fi
     tmp="${cache_file}.normalize.$$"
     : > "$tmp" || return 1
     while IFS="$TAB" read -r url title host; do
@@ -114,10 +133,24 @@ sl_sub_cache_normalize() {
 # Extract the fragment (title) from a proxy URL, after the first '#'.
 # Decoded, sanitized (tabs/newlines -> spaces).
 sl_sub_extract_title() {
-    local title
-    title="$(printf '%s' "$1" | sed -n 's/^[^#]*#\(.*\)$/\1/p')"
+    local title="$1"
+    case "$title" in
+        *\#*) title="${title#*\#}" ;;
+        *) title="" ;;
+    esac
     [ -z "$title" ] && title="$2"
     printf '%s' "$(sl_url_decode "$title")" | tr '\t\r\n' '   '
+}
+
+# Strip userinfo, path, query, fragment and port from a URL authority.
+_sl_sub_host_from_authority() {
+    local core="$1"
+    core="${core%%[/?#]*}"
+    case "$core" in
+        \[*\]*) core="${core#\[}"; core="${core%%\]*}" ;;
+        *) core="${core%%:*}" ;;
+    esac
+    printf '%s' "$core"
 }
 
 # Extract the host from a proxy URL.
@@ -127,22 +160,13 @@ sl_sub_extract_host() {
         vless://*|trojan://*|hy2://*|hysteria2://*|socks://*|socks4://*|socks5://*)
             core="${url#*://}"
             case "$core" in *@*) core="${core#*@}" ;; esac
-            core="$(printf '%s' "$core" | sed 's/[/?#].*$//')"
-            case "$core" in
-                \[*\]*) printf '%s' "$core" | sed 's/^\[\([^]]*\)\].*$/\1/' ;;
-                *) printf '%s' "$core" | sed 's/:.*$//' ;;
-            esac
+            _sl_sub_host_from_authority "$core"
             ;;
         ss://*)
             core="${url#ss://}"
             case "$core" in
                 *@*)
-                    core="${core#*@}"
-                    core="$(printf '%s' "$core" | sed 's/[/?#].*$//')"
-                    case "$core" in
-                        \[*\]*) printf '%s' "$core" | sed 's/^\[\([^]]*\)\].*$/\1/' ;;
-                        *) printf '%s' "$core" | sed 's/:.*$//' ;;
-                    esac
+                    _sl_sub_host_from_authority "${core#*@}"
                     ;;
                 *)
                     local enc dec
@@ -154,7 +178,9 @@ sl_sub_extract_host() {
                         3) enc="${enc}=" ;;
                     esac
                     dec="$(printf '%s' "$enc" | base64 -d 2>/dev/null || true)"
-                    printf '%s' "$dec" | grep -q '@' && printf '%s' "${dec#*@}" | sed 's/:.*$//'
+                    case "$dec" in
+                        *@*) _sl_sub_host_from_authority "${dec#*@}" ;;
+                    esac
                     ;;
             esac
             ;;
@@ -182,12 +208,87 @@ sl_sub_is_ip() {
     return 1
 }
 
+# DNS probing for subscription imports: parallel batches with a hard per-wave
+# timeout, so a slow or dead resolver cannot stall the whole import.
+SL_RESOLVE_BATCH=10
+SL_RESOLVE_TIMEOUT=5
+
 # Check if a host resolves via DNS (skips IP addresses).
+# Busybox nslookup has no timeout option; the caller bounds it (see
+# sl_sub_resolve_batch) when many hosts are probed at once.
 sl_sub_host_resolvable() {
     local host="$1"
     [ -z "$host" ] && return 1
     sl_sub_is_ip "$host" && return 0
     nslookup "$host" 127.0.0.1 >/dev/null 2>&1 || ping -c1 -W2 "$host" >/dev/null 2>&1
+}
+
+# Wait for a probe wave; a watchdog kills stragglers after the timeout so a
+# hung resolver cannot stall the wave (busybox sleep has no sub-second
+# resolution and nslookup has no timeout option).
+# Args: <pids>
+_sl_sub_resolve_wait() {
+    local pids="$1" watchdog pid
+    [ -n "$pids" ] || return 0
+    ( sleep "$SL_RESOLVE_TIMEOUT"
+      kill $pids 2>/dev/null
+    ) </dev/null >/dev/null 2>&1 &
+    watchdog=$!
+    for pid in $pids; do
+        wait "$pid" 2>/dev/null
+    done
+    kill "$watchdog" 2>/dev/null
+    wait "$watchdog" 2>/dev/null
+    return 0
+}
+
+# Resolve unique hosts in parallel batches, appending "host<TAB>ok" rows to
+# the resolve cache. Hosts already present in the cache are skipped.
+# Args: <hosts_file> <cache_file>
+sl_sub_resolve_batch() {
+    local hosts_file="$1" cache_file="$2"
+    [ -s "$hosts_file" ] || return 0
+
+    local pending_file="${cache_file}.pending.$$"
+    if [ -s "$cache_file" ]; then
+        awk -F "$TAB" 'NR==FNR { c[$1]=1; next } !($1 in c)' \
+            "$cache_file" "$hosts_file" > "$pending_file" 2>/dev/null
+    else
+        cp "$hosts_file" "$pending_file" 2>/dev/null || : > "$pending_file"
+    fi
+    [ -s "$pending_file" ] || { rm -f "$pending_file"; return 0; }
+
+    local tmp_dir="${cache_file}.probe.$$"
+    rm -rf "$tmp_dir"
+    mkdir -p "$tmp_dir"
+
+    local host key count=0 pids=""
+    while IFS= read -r host || [ -n "$host" ]; do
+        [ -z "$host" ] && continue
+        key="$(sl_text_key "$host")"
+        (
+            sl_sub_host_resolvable "$host" && printf '1' > "$tmp_dir/$key"
+        ) &
+        pids="$pids $!"
+        count=$((count + 1))
+        if [ "$count" -ge "$SL_RESOLVE_BATCH" ]; then
+            _sl_sub_resolve_wait "$pids"
+            pids=""
+            count=0
+        fi
+    done < "$pending_file"
+    [ -n "$pids" ] && _sl_sub_resolve_wait "$pids"
+
+    local ok
+    while IFS= read -r host || [ -n "$host" ]; do
+        [ -z "$host" ] && continue
+        key="$(sl_text_key "$host")"
+        if [ -s "$tmp_dir/$key" ]; then ok=1; else ok=0; fi
+        printf '%s\t%s\n' "$host" "$ok" >> "$cache_file"
+    done < "$pending_file"
+
+    rm -rf "$tmp_dir" "$pending_file"
+    return 0
 }
 
 sl_sub_host_resolvable_cached() {
@@ -208,20 +309,42 @@ sl_sub_host_resolvable_cached() {
 }
 
 # Extract the transport type from a proxy URL (the `type=` query param).
-# Defaults to "tcp" if not specified.
+# Defaults to "tcp" if not specified. Query parsing is pure shell so the
+# per-link hot path does not fork.
 sl_sub_extract_transport() {
-    local url="$1"
-    case "$(printf '%s' "$url" | tr 'A-Z' 'a-z')" in
-        ss://*|hy2://*|hysteria2://*|socks://*|socks4://*|socks5://*)
-            printf 'tcp'; return ;;
+    local url="$1" scheme rest tok key val
+    scheme="${url%%://*}"
+    case "$scheme" in
+        ss|hy2|hysteria2|socks|socks4|socks5) printf 'tcp'; return ;;
+        *[A-Z]*) scheme="$(printf '%s' "$scheme" | tr 'A-Z' 'a-z')" ;;
     esac
-    local query val
+    case "$scheme" in
+        ss|hy2|hysteria2|socks|socks4|socks5) printf 'tcp'; return ;;
+    esac
+
     case "$url" in
-        *\?*) query="${url#*\?}" ;;
-        *) query="" ;;
+        *\?*) rest="${url#*\?}" ;;
+        *) printf 'tcp'; return ;;
     esac
-    query="${query%%#*}"
-    val="$(printf '%s' "$query" | tr '&' '\n' | awk -F= 'tolower($1)=="type"{print tolower($2); exit}')"
+    rest="${rest%%#*}"
+    val=""
+    while [ -n "$rest" ]; do
+        tok="${rest%%&*}"
+        case "$rest" in
+            *\&*) rest="${rest#*\&}" ;;
+            *) rest="" ;;
+        esac
+        key="${tok%%=*}"
+        case "$key" in *[A-Z]*) key="$(printf '%s' "$key" | tr 'A-Z' 'a-z')" ;; esac
+        if [ "$key" = "type" ]; then
+            case "$tok" in
+                *=*) val="${tok#*=}" ;;
+                *) val="" ;;
+            esac
+            case "$val" in *[A-Z]*) val="$(printf '%s' "$val" | tr 'A-Z' 'a-z')" ;; esac
+            break
+        fi
+    done
     [ -z "$val" ] && val="tcp"
     printf '%s' "$val"
 }
@@ -235,62 +358,288 @@ sl_sub_transport_supported() {
     return 1
 }
 
-# Process a single proxy link: filter + append to out_file.
-# Args: <url> <out_file> <idx> <source_idx> [resolve_cache_file]
-# Returns 0 if appended, 1 if skipped.
-sl_sub_process_link() {
-    local url="$1" out_file="$2" idx="$3" src_idx="$4" resolve_cache="$5"
+# Prepare a proxy link for import: normalize, check scheme/transport.
+# No DNS here — hosts are resolved separately (in parallel batches) so a slow
+# resolver cannot serialize the import.
+# Args: <raw_url> <idx>
+# Echoes "<url>\t<title>\t<host>". Returns 1 if the link is unsupported.
+sl_sub_prepare_link() {
+    local url="$1" idx="$2"
     url="$(sl_sub_normalize_scheme "$(sl_sub_normalize_url "$url")")"
     url="$(sl_sub_ensure_packet_encoding "$url")"
     sl_sub_is_supported "$url" || return 1
-    local title host
+    local title host transport
     title="$(sl_sub_extract_title "$url" "Config $idx")"
     host="$(sl_sub_extract_host "$url")"
+    [ -n "$host" ] || return 1
     if [ "$SL_CFG_XHTTP" != "1" ]; then
-        local transport
         transport="$(sl_sub_extract_transport "$url")"
         if ! sl_sub_transport_supported "$transport"; then
             log "Skipping unsupported transport '$transport': $title" "debug"
             return 1
         fi
     fi
-    if ! sl_sub_host_resolvable_cached "$host" "$resolve_cache"; then
-        log "Skipping unresolvable host '$host': $title" "debug"
+    printf '%s\t%s\t%s' "$url" "$title" "$host"
+    return 0
+}
+
+# Process a single proxy link: prepare + DNS check + append to out_file.
+# Args: <url> <out_file> <idx> <source_idx> [resolve_cache_file]
+# Returns 0 if appended, 1 if skipped.
+sl_sub_process_link() {
+    local url="$1" out_file="$2" idx="$3" src_idx="$4" resolve_cache="$5"
+    local prepared
+    prepared="$(sl_sub_prepare_link "$url" "$idx")" || return 1
+
+    local p_url p_title p_host rest
+    p_url="${prepared%%"$TAB"*}"
+    rest="${prepared#*"$TAB"}"
+    p_title="${rest%%"$TAB"*}"
+    p_host="${rest#*"$TAB"}"
+
+    if ! sl_sub_host_resolvable_cached "$p_host" "$resolve_cache"; then
+        log "Skipping unresolvable host '$p_host': $p_title" "debug"
         return 1
     fi
-    printf '%s\t%s\t%s\t%s\n' "$url" "$title" "$host" "$src_idx" >> "$out_file"
+    printf '%s\t%s\t%s\t%s\n' "$p_url" "$p_title" "$p_host" "$src_idx" >> "$out_file"
 }
 
-sl_sub_exclude_match() {
-    local url="$1" title="$2" host="$3" filter="$4"
-    [ -n "$filter" ] || return 1
-    printf '%s' "$filter" | tr ';' '\n' | awk -v hay="$title $host $url" '
-        BEGIN { hay = tolower(hay) }
-        {
-            gsub(/^[[:space:]]+|[[:space:]]+$/, "")
-            if ($0 == "") next
-            if (index(hay, tolower($0)) > 0) { print $0; exit 0 }
+# Single-pass awk parser for subscription imports. Mirrors sl_sub_prepare_link
+# exactly (normalize, VLESS packetEncoding, title decode, host and transport
+# extraction) with one process per subscription instead of ~10 forks per link.
+# Unsupported links are dropped silently; transport skips are written to the
+# skip file, one message per line.
+_SL_SUB_PREPARE_PROGRAM='
+BEGIN { idx = start + 0; q = sprintf("%c", 39); OFS = "\t" }
+
+function hx(c) {
+    if (c >= "0" && c <= "9") return c + 0
+    c = tolower(c)
+    if (c >= "a" && c <= "f") return index("abcdef", c) + 9
+    return -1
+}
+
+function pct_decode(s,   out, i, n, c, h1, h2, v) {
+    out = ""
+    n = length(s)
+    i = 1
+    while (i <= n) {
+        c = substr(s, i, 1)
+        if (c == "+") { out = out " "; i++; continue }
+        if (c == "%") {
+            h1 = (i + 1 <= n ? hx(substr(s, i + 1, 1)) : -1)
+            if (h1 >= 0) {
+                h2 = (i + 2 <= n ? hx(substr(s, i + 2, 1)) : -1)
+                if (h2 >= 0) { v = h1 * 16 + h2; i += 3 }
+                else { v = h1; i += 2 }
+                out = out sprintf("%c", v)
+                continue
+            }
+            # busybox printf %b keeps a bad escape literal (\% becomes \x)
+            out = out "\\x"
+            i++
+            continue
         }
-    '
+        out = out c
+        i++
+    }
+    return out
 }
 
+function ensure_pe(u,   hpos, base, frag, qpos, prefix, query, n, parts, i, tk, k, v, has, out) {
+    if (substr(u, 1, 8) != "vless://") return u
+    hpos = index(u, "#")
+    if (hpos > 0) { frag = substr(u, hpos); base = substr(u, 1, hpos - 1) }
+    else { frag = ""; base = u }
+    qpos = index(base, "?")
+    if (qpos == 0) return base "?packetEncoding=xudp" frag
+    prefix = substr(base, 1, qpos - 1)
+    query = substr(base, qpos + 1)
+    n = split(query, parts, "&")
+    has = 0
+    out = ""
+    for (i = 1; i <= n; i++) {
+        tk = parts[i]
+        k = tk
+        sub(/=.*/, "", k)
+        v = ""
+        if (index(tk, "=") > 0) v = substr(tk, index(tk, "=") + 1)
+        if (k == "packetEncoding") {
+            has = 1
+            if (v == "") tk = "packetEncoding=xudp"
+        }
+        out = (out == "" ? tk : out "&" tk)
+    }
+    if (!has) {
+        if (out != "") out = out "&"
+        out = out "packetEncoding=xudp"
+    }
+    return prefix "?" out frag
+}
+
+function authority_host(core,   p, i, ch) {
+    p = 0
+    for (i = 1; i <= length(core); i++) {
+        ch = substr(core, i, 1)
+        if (ch == "/" || ch == "?" || ch == "#") { p = i; break }
+    }
+    if (p > 0) core = substr(core, 1, p - 1)
+    if (substr(core, 1, 1) == "[") {
+        p = index(core, "]")
+        if (p > 0) return substr(core, 2, p - 2)
+    }
+    p = index(core, ":")
+    if (p > 0) core = substr(core, 1, p - 1)
+    return core
+}
+
+function b64decode(s,   chars, i, n, c, p, acc, bits, out) {
+    chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+    out = ""
+    acc = 0
+    bits = 0
+    n = length(s)
+    for (i = 1; i <= n; i++) {
+        c = substr(s, i, 1)
+        if (c == "=") break
+        p = index(chars, c)
+        if (p == 0) return ""
+        acc = acc * 64 + (p - 1)
+        bits += 6
+        if (bits >= 8) {
+            bits -= 8
+            out = out sprintf("%c", int(acc / (2 ^ bits)) % 256)
+            acc = acc - int(acc / (2 ^ bits)) * (2 ^ bits)
+        }
+    }
+    return out
+}
+
+function extract_host(u, scheme,   p, core, dec, pad) {
+    if (scheme == "ss") {
+        core = substr(u, 6)
+        p = index(core, "@")
+        if (p > 0) return authority_host(substr(core, p + 1))
+        dec = core
+        sub(/[\/?#].*/, "", dec)
+        pad = length(dec) % 4
+        if (pad == 1) dec = dec "==="
+        else if (pad == 2) dec = dec "=="
+        else if (pad == 3) dec = dec "="
+        dec = b64decode(dec)
+        p = index(dec, "@")
+        if (p > 0) return authority_host(substr(dec, p + 1))
+        return ""
+    }
+    p = index(u, "://")
+    core = substr(u, p + 3)
+    p = index(core, "@")
+    if (p > 0) core = substr(core, p + 1)
+    return authority_host(core)
+}
+
+function extract_transport(u, scheme,   rest, tok, p, key, v) {
+    if (scheme == "ss" || scheme == "hy2" || scheme == "hysteria2" || scheme == "socks" || scheme == "socks4" || scheme == "socks5") return "tcp"
+    p = index(u, "?")
+    if (p == 0) return "tcp"
+    rest = substr(u, p + 1)
+    p = index(rest, "#")
+    if (p > 0) rest = substr(rest, 1, p - 1)
+    while (rest != "") {
+        p = index(rest, "&")
+        if (p > 0) { tok = substr(rest, 1, p - 1); rest = substr(rest, p + 1) }
+        else { tok = rest; rest = "" }
+        p = index(tok, "=")
+        if (p > 0) { key = substr(tok, 1, p - 1); v = substr(tok, p + 1) }
+        else { key = tok; v = "" }
+        if (tolower(key) == "type") return (tolower(v) == "" ? "tcp" : tolower(v))
+    }
+    return "tcp"
+}
+
+{
+    line = $0
+    sub(/^[[:space:]]+/, "", line)
+    sub(/[[:space:]]+$/, "", line)
+    if (line == "") next
+
+    p = index(line, "://")
+    if (p == 0) next
+    scheme = tolower(substr(line, 1, p - 1))
+    line = scheme substr(line, p)
+    if (scheme != "vless" && scheme != "ss" && scheme != "trojan" && scheme != "hy2" && scheme != "hysteria2" && scheme != "socks" && scheme != "socks4" && scheme != "socks5") next
+
+    gsub(/[\t\r]/, " ", line)
+    gsub(/ /, "%20", line)
+
+    if (scheme == "vless") line = ensure_pe(line)
+
+    p = index(line, "#")
+    if (p > 0) frag = substr(line, p + 1)
+    else frag = ""
+    if (frag == "") title = "Config " idx
+    else title = pct_decode(frag)
+    gsub(/[\t\r\n]/, " ", title)
+
+    host = extract_host(line, scheme)
+    if (host == "") next
+
+    if (xhttp != "1") {
+        tr = extract_transport(line, scheme)
+        if (index(" " transports " ", " " tr " ") == 0) {
+            print "Skipping unsupported transport " q tr q ": " title > skipfile
+            next
+        }
+    }
+
+    print line, title, host
+    idx++
+}
+'
+
+# Parse a decoded subscription file into prepared "<url>\t<title>\t<host>"
+# rows (see _SL_SUB_PREPARE_PROGRAM). Transport skips are appended to
+# skip_file. Args: <in_file> <out_file> <skip_file> <start_idx>
+_sl_sub_prepare_stream() {
+    local in_file="$1" out_file="$2" skip_file="$3" start_idx="$4"
+    : > "$out_file"
+    : > "$skip_file"
+    awk -v start="$start_idx" -v xhttp="$SL_CFG_XHTTP" \
+        -v transports="$SUPPORTED_TRANSPORTS" -v skipfile="$skip_file" \
+        "$_SL_SUB_PREPARE_PROGRAM" "$in_file" > "$out_file" 2>/dev/null
+}
+
+# Apply a user exclusion filter to prepared rows (single awk pass).
+# Rows are already normalized by the parser/cache normalizer, so field 1 is
+# written through unchanged. Matching rows are appended to the excluded file
+# with the matched filter item appended; others are appended to the active
+# file. Both outputs are appended to (several sources share the same files).
+# Args: <in_file> <active_file> <excluded_file> <filter>
 sl_sub_apply_user_filter_file() {
     local in_file="$1" active_file="$2" excluded_file="$3" filter="$4"
-    local line url title host src_idx reason
-    while IFS= read -r line || [ -n "$line" ]; do
-        [ -z "$line" ] && continue
-        url="$(printf '%s' "$line" | cut -f1)"
-        url="$(sl_sub_ensure_packet_encoding "$url")"
-        title="$(printf '%s' "$line" | cut -f2)"
-        host="$(printf '%s' "$line" | cut -f3)"
-        src_idx="$(printf '%s' "$line" | cut -f4)"
-        reason="$(sl_sub_exclude_match "$url" "$title" "$host" "$filter")"
-        if [ -n "$reason" ]; then
-            printf '%s\t%s\t%s\t%s\t%s\n' "$url" "$title" "$host" "$src_idx" "$reason" >> "$excluded_file"
-        else
-            printf '%s\t%s\t%s\t%s\n' "$url" "$title" "$host" "$src_idx" >> "$active_file"
-        fi
-    done < "$in_file"
+    SL_SUB_FILTER="$filter" awk -F "$TAB" -v active="$active_file" -v excluded="$excluded_file" '
+        BEGIN {
+            n = split(ENVIRON["SL_SUB_FILTER"], items, ";")
+            m = 0
+            for (i = 1; i <= n; i++) {
+                it = items[i]
+                gsub(/^[[:space:]]+|[[:space:]]+$/, "", it)
+                if (it == "") continue
+                m++
+                orig[m] = it
+                low[m] = tolower(it)
+            }
+        }
+        {
+            hay = tolower($2 " " $3 " " $1)
+            reason = ""
+            for (i = 1; i <= m; i++) {
+                if (index(hay, low[i]) > 0) { reason = orig[i]; break }
+            }
+            if (reason != "") print $0 "\t" reason >> excluded
+            else print $0 >> active
+        }
+    ' "$in_file"
 }
 
 # Fetch a single subscription URL and append parsed lines to out_file.
@@ -332,17 +681,48 @@ sl_sub_fetch_one() {
     fi
     rm -f "$norm_file"
 
-    local appended=0 skipped=0 line
-    while IFS= read -r line || [ -n "$line" ]; do
-        line="$(printf '%s' "$line" | sed 's/\r//; s/^[[:space:]]*//; s/[[:space:]]*$//')"
-        [ -z "$line" ] && continue
-        if sl_sub_process_link "$line" "$out_file" "$idx" "$src_idx" "$resolve_cache"; then
-            idx=$((idx + 1))
+    # Pass 1: normalize + scheme/transport filtering (single awk pass, no DNS).
+    local prepared_file="${out_file}.prepared.$$"
+    local hosts_file="${out_file}.hosts.$$"
+    local skip_file="${out_file}.skip.$$"
+    if ! _sl_sub_prepare_stream "$dec_file" "$prepared_file" "$skip_file" "$idx"; then
+        # A parser failure must not look like an empty subscription: report a
+        # fetch failure so callers keep using the previous cache.
+        log "Failed to parse subscription content: $sub_url" "warn"
+        rm -f "$raw_file" "$dec_file" "$prepared_file" "$hosts_file" "$skip_file"
+        return 1
+    fi
+    local prepared_count input_count
+    prepared_count="$(wc -l < "$prepared_file" 2>/dev/null || echo 0)"
+    case "$prepared_count" in *[!0-9]*) prepared_count=0 ;; esac
+    idx=$((idx + prepared_count))
+    input_count="$(grep -c . "$dec_file" 2>/dev/null || echo 0)"
+    case "$input_count" in *[!0-9]*) input_count=0 ;; esac
+    local appended=0 skipped=$((input_count - prepared_count))
+    [ "$skipped" -lt 0 ] && skipped=0
+    local reason
+    while IFS= read -r reason; do
+        [ -n "$reason" ] && log "$reason" "debug"
+    done < "$skip_file"
+    rm -f "$skip_file"
+
+    # Resolve all unique hosts in parallel batches before the per-link checks.
+    cut -f3 "$prepared_file" 2>/dev/null | grep -v '^$' | sort -u > "$hosts_file"
+    sl_sub_resolve_batch "$hosts_file" "$resolve_cache"
+
+    # Pass 2: append links whose hosts resolved.
+    local p_url p_title p_host
+    while IFS="$TAB" read -r p_url p_title p_host || [ -n "$p_url" ]; do
+        [ -z "$p_url" ] && continue
+        if sl_sub_host_resolvable_cached "$p_host" "$resolve_cache"; then
+            printf '%s\t%s\t%s\t%s\n' "$p_url" "$p_title" "$p_host" "$src_idx" >> "$out_file"
             appended=1
         else
             skipped=$((skipped + 1))
+            log "Skipping unresolvable host '$p_host': $p_title" "debug"
         fi
-    done < "$dec_file"
+    done < "$prepared_file"
+    rm -f "$prepared_file" "$hosts_file"
 
     [ "$skipped" -gt 0 ] && log "Filtered $skipped server(s) from subscription" "debug"
     rm -f "$raw_file" "$dec_file" "$norm_file"

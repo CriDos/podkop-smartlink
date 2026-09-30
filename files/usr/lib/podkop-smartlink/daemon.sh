@@ -6,6 +6,7 @@ _sl_daemon_cleanup() {
     [ -n "$SL_SYNC_LOCK_TOKEN" ] && sl_lock_release "$STATE_SYNC_LOCK" "$SL_SYNC_LOCK_TOKEN"
     rm -f "${STATE_PID}" 2>/dev/null
     rm -f "${STATE_DIR}"/stats.* "${STATE_DIR}"/keymap.* "${STATE_DIR}"/status_data.* 2>/dev/null
+    rm -f "${STATE_DIR}"/hist_rows.* "${STATE_DIR}"/hist_keys.* "${STATE_DIR}"/hist_urls.* 2>/dev/null
     rm -f "${STATE_DIR}"/src_*.tmp "${STATE_DIR}"/*.excluded.work 2>/dev/null
     log "SmartLink daemon stopped" "info"
 }
@@ -17,6 +18,7 @@ sl_daemon_run() {
     local fail_count=0
     local last_stats_ping=0
     local last_detect=0
+    local last_links_mtime=0
     local fetch_fail_count=0
     local fetch_backoff=0
 
@@ -117,6 +119,15 @@ sl_daemon_run() {
         local full_links="$STATE_LINKS_FULL"
         [ -s "$full_links" ] || { sleep "$check_sec"; continue; }
 
+        # A changed link set (fresh import/refresh) refreshes all pings at
+        # once instead of waiting for the stats interval.
+        local links_mtime links_changed=0
+        links_mtime="$(sl_file_mtime "$full_links")"
+        if [ "$links_mtime" != "$last_links_mtime" ]; then
+            last_links_mtime="$links_mtime"
+            links_changed=1
+        fi
+
         # --- periodic Stats ping (skip first iteration after boot) ---
         local stats_interval since_stats
         stats_interval="$SL_CFG_STATS_PING_INTERVAL"
@@ -125,10 +136,19 @@ sl_daemon_run() {
             last_stats_ping="$now"
         fi
         since_stats=$(( now - last_stats_ping ))
-        if [ "$since_stats" -ge "$stats_interval" ]; then
-            if ! sl_refresh_active; then
-                sl_sel_stats_ping "$group_tag" "$full_links"
-                last_stats_ping="$now"
+        if [ "$links_changed" -eq 1 ] || [ "$since_stats" -ge "$stats_interval" ]; then
+            if sl_refresh_active; then
+                # A refresh job started meanwhile; retry the change handling
+                # right after it finishes instead of waiting for the interval.
+                [ "$links_changed" -eq 1 ] && last_links_mtime=0
+            else
+                if [ "$links_changed" -eq 1 ] && ! sl_sel_current_valid "$full_links" "$group_tag"; then
+                    # Re-selection below runs a full ping; skip the stats ping.
+                    :
+                else
+                    sl_sel_stats_ping "$group_tag" "$full_links"
+                    last_stats_ping="$now"
+                fi
             fi
         fi
 

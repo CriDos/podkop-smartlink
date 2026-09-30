@@ -729,10 +729,11 @@ function renderSources() {
     var attempts = 0;
     return new Promise(function (resolve, reject) {
       function poll() {
-        // The backend allows up to 180s for a background job. Keep polling
-        // slightly longer than the old 90s window so a slow multi-source
-        // refresh is not mistaken for a failed transaction in the UI.
-        if (attempts++ > 120) {
+        // The first import of a large subscription (download, DNS checks,
+        // Podkop reload) can take minutes. Poll generously so a slow but
+        // healthy refresh is not mistaken for a failed transaction. The
+        // post-refresh ping runs in the daemon and is not part of the job.
+        if (attempts++ > 240) {
           reject(new Error(t("refreshFailed")));
           return;
         }
@@ -752,6 +753,26 @@ function renderSources() {
     });
   }
 
+  // The daemon fills ping data right after a refresh finished; poll lightly
+  // in the background so the table shows fresh values without a manual
+  // refresh (the refresh itself no longer waits for the full ping).
+  function fillStatusInBackground() {
+    var attempts = 0;
+    function poll() {
+      if (attempts++ >= 20 || state.activeTab !== "sources") return;
+      api.status().then(function (st) {
+        var list = (st && st.proxies) || [];
+        var hasPings = list.some(function (p) { return p.checks > 0; });
+        if (st && !st.error && !st.refreshing && hasPings) {
+          loadStatus();
+          return;
+        }
+        setTimeout(poll, 2500);
+      }, function () { setTimeout(poll, 2500); });
+    }
+    setTimeout(poll, 2500);
+  }
+
   var refreshBtn = el("button", { class: "cbi-button sl-refresh-btn" }, [t("refreshSubs")]);
   if (state.dirty) refreshBtn.disabled = true;
   refreshBtn.addEventListener("click", function () {
@@ -762,6 +783,7 @@ function renderSources() {
       if (!res || res.error) throw new Error(apiErrorMessage(res, t("refreshFailed")));
       return waitForRefresh().then(function () {
         toast(t("refreshDone"), "ok");
+        fillStatusInBackground();
         return loadAll();
       });
     }).catch(function (err) {
@@ -806,6 +828,7 @@ function renderSources() {
         return waitForRefresh().then(function () {
           discardSourceDraft();
           toast(t("saved"), "ok");
+          fillStatusInBackground();
           return loadAll();
         });
       }).catch(function (err) {

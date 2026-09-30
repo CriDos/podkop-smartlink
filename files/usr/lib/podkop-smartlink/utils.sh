@@ -164,7 +164,8 @@ sl_filter_normalize() {
 # Record ping history for all entries in a ping_file using a prebuilt tag map.
 # ping_file format: "<latency_or_empty>\t<tag>" per line.
 # map_file format:  "<tag>\t<url>\t[...]" per line (only fields 1-2 are used).
-# This replaces the 4x-duplicated while-read loop across the codebase.
+# Batched: one awk pass for the tag join, one md5sum for all keys and one awk
+# pass that appends/trims the history files (instead of ~10 forks per entry).
 sl_hist_record_pings() {
     local ping_file="$1"
     local map_file="$2"
@@ -173,37 +174,86 @@ sl_hist_record_pings() {
     [ -s "$ping_file" ] || return 0
     [ -s "$map_file" ] || return 0
 
-    awk -F "$TAB" '
-        NR == FNR {
-            url[$1] = $2
-            next
-        }
+    local rows="${STATE_DIR}/hist_rows.$$" keys="${STATE_DIR}/hist_keys.$$"
+    awk -F "$TAB" -v max="$max_ping" '
+        NR == FNR { url[$1] = $2; next }
         {
             tag = $2
-            lat = $1
             if (tag in url) {
-                u = url[tag]
-                print u "\t" lat
+                lat = $1
+                ok = 0
+                if (lat ~ /^[0-9]+$/) {
+                    if (max <= 0 || lat + 0 <= max) ok = 1
+                } else {
+                    lat = ""
+                }
+                printf "%s\t%s\t%s\n", url[tag], lat, ok
             }
         }
-    ' "$map_file" "$ping_file" | while IFS= read -r line; do
-        [ -z "$line" ] && continue
-        local url lat
-        url="$(printf '%s' "$line" | cut -f1)"
-        lat="$(printf '%s' "$line" | cut -f2)"
-        case "$lat" in
-            ''|*[!0-9]*)
-                sl_hist_append "$url" "" 0
-                ;;
-            *)
-                if [ "$max_ping" -le 0 ] || [ "$lat" -le "$max_ping" ]; then
-                    sl_hist_append "$url" "$lat" 1
-                else
-                    sl_hist_append "$url" "$lat" 0
-                fi
-                ;;
-        esac
-    done
+    ' "$map_file" "$ping_file" > "$rows" 2>/dev/null
+    if [ ! -s "$rows" ]; then
+        rm -f "$rows" "$keys"
+        return 0
+    fi
+
+    # md5 keys for the unique URLs (one md5sum per URL; md5sum can only hash
+    # whole streams, and the per-URL cost is still far below the old path)
+    local uniq="${STATE_DIR}/hist_urls.$$" u
+    awk -F "$TAB" '{ print $1 }' "$rows" | sort -u > "$uniq" 2>/dev/null
+    : > "$keys"
+    while IFS= read -r u || [ -n "$u" ]; do
+        [ -n "$u" ] || continue
+        printf '%s\t%s\n' "$u" "$(sl_hist_key "$u")" >> "$keys"
+    done < "$uniq"
+    rm -f "$uniq"
+    if [ ! -s "$keys" ]; then
+        rm -f "$rows" "$keys"
+        return 0
+    fi
+    awk -F "$TAB" -v kf="$keys" '
+        NR == FNR { k[$1] = $2; next }
+        { print $0 "\t" k[$1] }
+    ' "$keys" "$rows" > "${rows}.keyed" 2>/dev/null \
+        && mv "${rows}.keyed" "$rows" \
+        || { rm -f "$rows" "$keys" "${rows}.keyed"; return 1; }
+
+    local ts
+    ts="$(date +%s)"
+    mkdir -p "$STATE_HISTORY_DIR"
+    _sl_hist_lock || { rm -f "$rows" "$keys"; return 1; }
+
+    awk -F "$TAB" -v dir="$STATE_HISTORY_DIR" -v cap="$HISTORY_MAX_SAMPLES" -v ts="$ts" '
+        NF >= 4 && $4 != "" {
+            key = $4
+            lat = ($2 == "" ? "-" : $2)
+            new[key] = new[key] ts "\t" lat "\t" $3 "\n"
+            cnt[key]++
+        }
+        END {
+            for (key in new) {
+                file = dir "/" key
+                n = 0
+                while ((getline line < file) > 0) { n++; old[key, n] = line }
+                close(file)
+                if (n + cnt[key] <= cap) {
+                    printf "%s", new[key] >> file
+                    close(file)
+                    continue
+                }
+                keep = cap - cnt[key]
+                if (keep < 0) keep = 0
+                out = ""
+                for (i = n - keep + 1; i <= n; i++) out = out old[key, i] "\n"
+                printf "%s", out new[key] > file ".tmp"
+                close(file ".tmp")
+                system("mv " file ".tmp " file)
+            }
+        }
+    ' "$rows" 2>/dev/null
+
+    _sl_hist_unlock
+    rm -f "$rows" "$keys"
+    return 0
 }
 
 # Get URL column (field 1) from a links file, one per line.

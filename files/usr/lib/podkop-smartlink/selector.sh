@@ -275,28 +275,14 @@ sl_sel_ping_source() {
     [ -s "$urls_file" ] || { rm -f "$urls_file"; return 1; }
 
     local src_tags_file="${ping_file}.tags"
-    : > "$src_tags_file"
-    while IFS= read -r line; do
-        [ -z "$line" ] && continue
-        local tag
-        tag="$(printf '%s' "$line" | cut -f1)"
-        [ -z "$tag" ] && continue
-        printf '%s\n' "$tag" >> "$src_tags_file"
-    done < "$urls_file"
+    cut -f1 "$urls_file" 2>/dev/null | grep -v '^$' > "$src_tags_file"
 
     # Parallel ping
     sl_clash_ping_tags_file "$ping_file" "$SL_CFG_PING_TIMEOUT" "$src_tags_file"
 
     # Record history using tag->url map
     local map_file="${ping_file}.map"
-    : > "$map_file"
-    while IFS= read -r line; do
-        [ -z "$line" ] && continue
-        local mtag murl
-        mtag="$(printf '%s' "$line" | cut -f1)"
-        murl="$(printf '%s' "$line" | cut -f2)"
-        printf '%s\t%s\t\t0\n' "$mtag" "$murl" >> "$map_file"
-    done < "$urls_file"
+    awk -F "$TAB" '{ print $1 "\t" $2 "\t\t0" }' "$urls_file" > "$map_file" 2>/dev/null
     sl_hist_record_pings "$ping_file" "$map_file"
     rm -f "$urls_file" "$src_tags_file" "$map_file"
 

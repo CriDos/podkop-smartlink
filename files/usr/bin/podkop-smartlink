@@ -230,7 +230,7 @@ _cmd_start_sync_job() {
         config_load "$SL_NAME"
         sl_cfg_load
 
-        local sync_rc work shell_pid lock_pid tries group_tag
+        local sync_rc work shell_pid lock_pid tries
         shell_pid="$$"
         tries=0
         while :; do
@@ -249,15 +249,9 @@ _cmd_start_sync_job() {
         fi
         sync_rc=$?
 
-        if [ "$sync_rc" -eq 0 ] && [ -s "$STATE_LINKS_FULL" ]; then
-            sl_clash_wait_ready 2>/dev/null
-            group_tag="$(sl_clash_group_tag "$SL_CFG_TARGET_SECTION")"
-            if sl_sel_current_valid "$STATE_LINKS_FULL" "$group_tag"; then
-                sl_sel_stats_ping "$group_tag" "$STATE_LINKS_FULL"
-            else
-                sl_sel_ping_all "$group_tag" "$STATE_LINKS_FULL" || true
-            fi
-        fi
+        # Pinging every server through the tunnel is deferred to the daemon
+        # (it detects the changed link set and refreshes pings right after);
+        # this keeps large imports off the user-visible refresh path.
 
         if [ "$sync_rc" -eq 0 ]; then
             if ! _source_txn_commit; then
@@ -449,17 +443,6 @@ EOF
     fi
 
     printf '%s\t%s\n' "$changed" "$changed_hashes"
-}
-
-_sources_valid_hashes() {
-    local records_file="$1" u valid_hashes=""
-    while IFS= read -r u; do
-        [ -z "$u" ] && continue
-        valid_hashes="${valid_hashes}$(sl_sub_hash "$u") "
-    done <<EOF
-$(cut -f1 "$records_file" 2>/dev/null)
-EOF
-    printf '%s' "$valid_hashes"
 }
 
 _sources_valid_hashes_for_current_sources() {

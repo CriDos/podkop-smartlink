@@ -5,18 +5,11 @@ sl_hist_key() {
     printf '%s' "$1" | md5sum | cut -c1-16
 }
 
-# Append a measurement. Args: <url> <latency_or_empty> <ok:1|0>
-sl_hist_append() {
-    local url="$1" lat="$2" ok="$3"
-    local key ts
-    key="$(sl_hist_key "$url")"
-    ts="$(date +%s)"
-    [ -z "$lat" ] && lat="-"
-    local hfile="$STATE_HISTORY_DIR/$key"
-
-    # Atomic append via mkdir lock (prevents interleaving with concurrent writers)
-    local lock_dir="${STATE_HISTORY_DIR}/.lock_${key}"
-    local waited=0
+# Shared history lock: serializes single appends and batch records so a trim
+# rewrite cannot lose a concurrent sample. Stale locks (30s) are reclaimed.
+_sl_hist_lock() {
+    local lock_dir="${STATE_HISTORY_DIR}/.lock" waited=0
+    mkdir -p "$STATE_HISTORY_DIR"
     while ! mkdir "$lock_dir" 2>/dev/null; do
         if [ "$(( $(date +%s) - $(sl_safe_num "$(sl_file_mtime "$lock_dir")") ))" -gt 30 ]; then
             rm -rf "$lock_dir" 2>/dev/null
@@ -26,18 +19,33 @@ sl_hist_append() {
         sleep 1
         waited=$((waited + 1))
     done
+    return 0
+}
 
+_sl_hist_unlock() {
+    rmdir "${STATE_HISTORY_DIR}/.lock" 2>/dev/null
+}
+
+# Append a measurement. Args: <url> <latency_or_empty> <ok:1|0>
+sl_hist_append() {
+    local url="$1" lat="$2" ok="$3"
+    local key ts hfile lines tmp
+    key="$(sl_hist_key "$url")"
+    ts="$(date +%s)"
+    [ -z "$lat" ] && lat="-"
+    hfile="$STATE_HISTORY_DIR/$key"
+
+    _sl_hist_lock || return 1
     printf '%s\t%s\t%s\n' "$ts" "$lat" "$ok" >> "$hfile"
 
     # Trim to max samples if file grew beyond cap
-    local lines
     lines="$(wc -l < "$hfile" 2>/dev/null || echo 0)"
     if [ "$lines" -gt "$HISTORY_MAX_SAMPLES" ]; then
-        local tmp="${hfile}.$$"
+        tmp="${hfile}.$$"
         tail -n "$HISTORY_MAX_SAMPLES" "$hfile" > "$tmp" && mv "$tmp" "$hfile"
     fi
-
-    rmdir "$lock_dir" 2>/dev/null
+    _sl_hist_unlock
+    return 0
 }
 
 # Precompute stats for all history files in a single awk pass.
@@ -53,7 +61,7 @@ sl_hist_precompute_all() {
     for hfile in "$STATE_HISTORY_DIR"/*; do
         [ -f "$hfile" ] || continue
         case "$(basename "$hfile")" in
-            .lock_*) continue ;;
+            .lock*|*.tmp) continue ;;
         esac
         local k
         k="$(basename "$hfile")"
