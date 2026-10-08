@@ -86,12 +86,12 @@ dl "$REPO/files/usr/bin/podkop-smartlink-read" "$TMP/podkop-smartlink-read"
 dl "$REPO/files/usr/bin/podkop-smartlink-write" "$TMP/podkop-smartlink-write"
 dl "$REPO/files/etc/init.d/podkop-smartlink" "$TMP/podkop-smartlink.init"
 dl "$REPO/files/etc/config/podkop-smartlink" "$TMP/podkop-smartlink.config"
-dl "$REPO/luci-app-podkop-smartlink/root/etc/uci-defaults/50_luci-podkop-smartlink" "$TMP/50_luci-podkop-smartlink"
+dl "$REPO/luci-app/root/etc/uci-defaults/50_luci-podkop-smartlink" "$TMP/50_luci-podkop-smartlink"
 
 # LuCI
-dl "$REPO/luci-app-podkop-smartlink/htdocs/luci-static/resources/view/podkop/smartlink.js" "$TMP/luci/smartlink.js"
-dl "$REPO/luci-app-podkop-smartlink/root/usr/share/luci/menu.d/luci-app-podkop-smartlink.json" "$TMP/luci/menu.json"
-dl "$REPO/luci-app-podkop-smartlink/root/usr/share/rpcd/acl.d/luci-app-podkop-smartlink.json" "$TMP/luci/acl.json"
+dl "$REPO/luci-app/htdocs/luci-static/resources/view/podkop/smartlink.js" "$TMP/luci/smartlink.js"
+dl "$REPO/luci-app/root/usr/share/luci/menu.d/luci-app-podkop-smartlink.json" "$TMP/luci/menu.json"
+dl "$REPO/luci-app/root/usr/share/rpcd/acl.d/luci-app-podkop-smartlink.json" "$TMP/luci/acl.json"
 
 # ---- install backend ----
 echo "Installing backend..."
