@@ -14,6 +14,10 @@
 #   DEST_FILE=/usr/bin/sing-box   target path
 #   SERVICE=podkop         service to stop/start (default: auto-detect podkop/sing-box, empty = skip)
 #
+# The old binary is replaced in place: no backup copy is kept, and free space
+# (counted together with the space the old binary frees) is checked before
+# the service is stopped.
+#
 # sing-box-lx is Leadaxe's thin upstream 1.14.x fork with XHTTP et al:
 # https://github.com/Leadaxe/sing-box-lx
 # Upstream sing-box releases: https://github.com/SagerNet/sing-box
@@ -23,6 +27,7 @@
 
 DEST_FILE="${DEST_FILE:-/usr/bin/sing-box}"
 ENGINE="${ENGINE:-}"
+SERVICE_STOPPED=0
 MIRROR_PREFIX="https://ghproxy.net/"
 WORK_DIR="/tmp/lx-install"
 LX_REPO="Leadaxe/sing-box-lx"
@@ -36,7 +41,7 @@ if [ -t 1 ]; then
 fi
 say()  { printf "$G[*]${N} %s\n" "$1"; }
 warn() { printf "$Y[!]${N} %s\n" "$1"; }
-die()  { printf "$R[x]${N} %s\n" "$1"; rm -rf "$WORK_DIR"; exit 1; }
+die()  { printf "$R[x]${N} %s\n" "$1"; rm -f "${DEST_FILE}.tmp"; rm -rf "$WORK_DIR"; exit 1; }
 
 case "$DISTRIB_ARCH" in
     aarch64*)
@@ -179,7 +184,7 @@ if [ "$TMP_FREE" -lt "$TMP_NEED_KB" ]; then
     fi
 fi
 rm -rf "$WORK_DIR" && mkdir -p "$WORK_DIR" || die "Failed to create $WORK_DIR."
-trap 'rm -rf "$WORK_DIR"' EXIT INT TERM
+trap '[ "$SERVICE_STOPPED" = "1" ] && [ -n "$SERVICE" ] && "/etc/init.d/$SERVICE" start >/dev/null 2>&1; rm -rf "$WORK_DIR"' EXIT INT TERM
 
 say "Downloading archive..."
 if ! download "$URL" "$WORK_DIR/$ASSET"; then
@@ -219,7 +224,28 @@ fi
 if [ -f "$DEST_FILE" ]; then
     OLD_VER=$("$DEST_FILE" version 2>/dev/null | head -n 1)
     say "Current binary: ${OLD_VER:-unknown}"
-    [ -f "${DEST_FILE}.bak" ] || { cp -f "$DEST_FILE" "${DEST_FILE}.bak" && say "Backup: ${DEST_FILE}.bak"; }
+fi
+
+# Pre-flight: the old binary is removed before the new one is written, so the
+# destination filesystem must hold the new binary plus a small margin
+# (measured as free space plus the space the old binary will free). Checked
+# before the service is stopped so a full disk cannot leave the router
+# without a running engine. No backup copy is kept.
+BIN_BYTES=$(wc -c < "$BIN")
+BIN_KB=$(( (BIN_BYTES + 1023) / 1024 ))
+DEST_OLD_KB=0
+if [ -f "$DEST_FILE" ]; then
+    DEST_OLD_BYTES=$(wc -c < "$DEST_FILE" 2>/dev/null || echo 0)
+    DEST_OLD_KB=$(( DEST_OLD_BYTES / 1024 ))
+fi
+DEST_DIR=$(dirname "$DEST_FILE")
+mkdir -p "$DEST_DIR" 2>/dev/null || true
+DEST_FREE_KB=$(df -Pk "$DEST_DIR" 2>/dev/null | awk 'NR==2 {print $4}')
+[ -z "$DEST_FREE_KB" ] && DEST_FREE_KB=0
+NEED_KB=$(( BIN_KB + 2048 ))
+AVAIL_KB=$(( DEST_FREE_KB + DEST_OLD_KB ))
+if [ "$AVAIL_KB" -lt "$NEED_KB" ]; then
+    die "Not enough space in $DEST_DIR: need ~$(( BIN_KB / 1024 )) MB, available ~$(( AVAIL_KB / 1024 )) MB (free $(( DEST_FREE_KB / 1024 )) MB + old binary $(( DEST_OLD_KB / 1024 )) MB)."
 fi
 
 if [ -n "$SERVICE" ] && [ -x "/etc/init.d/$SERVICE" ]; then
@@ -227,10 +253,11 @@ if [ -n "$SERVICE" ] && [ -x "/etc/init.d/$SERVICE" ]; then
     "/etc/init.d/$SERVICE" stop >/dev/null 2>&1
     killall sing-box >/dev/null 2>&1
     sleep 2
+    SERVICE_STOPPED=1
 fi
 
 say "Installing $DEST_FILE..."
-mkdir -p "$(dirname "$DEST_FILE")"
+rm -f "$DEST_FILE" "${DEST_FILE}.tmp"
 cp -f "$BIN" "${DEST_FILE}.tmp" || die "Failed to write ${DEST_FILE}.tmp (out of space?)."
 chmod +x "${DEST_FILE}.tmp"
 mv -f "${DEST_FILE}.tmp" "$DEST_FILE" || die "Failed to replace $DEST_FILE."
@@ -244,6 +271,10 @@ say "Installed: ${INSTALLED:-failed to get the version}"
 
 if [ -n "$SERVICE" ] && [ -x "/etc/init.d/$SERVICE" ]; then
     say "Starting $SERVICE..."
-    "/etc/init.d/$SERVICE" start >/dev/null 2>&1 || warn "Failed to start $SERVICE, check the logs."
+    if "/etc/init.d/$SERVICE" start >/dev/null 2>&1; then
+        SERVICE_STOPPED=0
+    else
+        warn "Failed to start $SERVICE, check the logs."
+    fi
 fi
 say "Done."
