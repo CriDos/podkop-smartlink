@@ -106,16 +106,99 @@ EOF
     printf '%s?%s%s' "$prefix" "$new_query" "$fragment"
 }
 
+# Make VLESS/Trojan transport and security explicit for Podkop-generated
+# outbounds. Podkop logs "Unknown transport/security ''" and (for trojan)
+# never configures TLS when the parameter is missing; the protocol defaults
+# are type=tcp, security=none for VLESS and type=tcp, security=tls for
+# Trojan. Only missing or empty values are filled in; explicit values
+# (ws, grpc, xhttp, raw, reality, ...) are kept untouched. The parameters
+# belong before the URL fragment so Podkop parses them as query options.
+sl_sub_ensure_transport_security() {
+    local url="$1" scheme default_type default_security base fragment query prefix token key value key_lc new_query has_type has_security
+    case "$url" in
+        *://*) scheme="${url%%://*}" ;;
+        *) printf '%s' "$url"; return 0 ;;
+    esac
+    case "$scheme" in *[A-Z]*) scheme="$(printf '%s' "$scheme" | tr 'A-Z' 'a-z')" ;; esac
+    case "$scheme" in
+        vless) default_type="tcp"; default_security="none" ;;
+        trojan) default_type="tcp"; default_security="tls" ;;
+        *) printf '%s' "$url"; return 0 ;;
+    esac
+
+    case "$url" in
+        *\#*)
+            base="${url%%#*}"
+            fragment="#${url#*#}"
+            ;;
+        *)
+            base="$url"
+            fragment=""
+            ;;
+    esac
+
+    case "$base" in
+        *\?*)
+            prefix="${base%%\?*}"
+            query="${base#*\?}"
+            ;;
+        *)
+            printf '%s?type=%s&security=%s%s' "$base" "$default_type" "$default_security" "$fragment"
+            return 0
+    esac
+
+    new_query=""
+    has_type=0
+    has_security=0
+    # Read tokens line-by-line so shell pathname expansion cannot rewrite a
+    # query value containing wildcard characters.
+    while IFS= read -r token || [ -n "$token" ]; do
+        key="${token%%=*}"
+        value=""
+        case "$token" in
+            *=*) value="${token#*=}" ;;
+        esac
+        key_lc="$key"
+        case "$key" in *[A-Z]*) key_lc="$(printf '%s' "$key" | tr 'A-Z' 'a-z')" ;; esac
+        if [ "$key_lc" = "type" ]; then
+            has_type=1
+            [ -n "$value" ] || token="type=$default_type"
+        elif [ "$key_lc" = "security" ]; then
+            has_security=1
+            [ -n "$value" ] || token="security=$default_security"
+        fi
+        if [ -n "$new_query" ]; then
+            new_query="${new_query}&${token}"
+        else
+            new_query="$token"
+        fi
+    done <<EOF
+$(printf '%s' "$query" | tr '&' '\n')
+EOF
+
+    if [ "$has_type" -eq 0 ]; then
+        [ -n "$new_query" ] && new_query="${new_query}&"
+        new_query="${new_query}type=$default_type"
+    fi
+    if [ "$has_security" -eq 0 ]; then
+        [ -n "$new_query" ] && new_query="${new_query}&"
+        new_query="${new_query}security=$default_security"
+    fi
+
+    printf '%s?%s%s' "$prefix" "$new_query" "$fragment"
+}
+
 # Normalize cached subscription entries after the parser behavior changes.
 # Cache files contain URL/title/host fields and are otherwise reused without
 # passing through sl_sub_process_link again.
 sl_sub_cache_normalize() {
     local cache_file="$1" tmp url title host
     [ -s "$cache_file" ] || return 0
-    # Rewriting is only needed for vless links without a packetEncoding value;
-    # skip the per-line rewrite entirely when there are none.
+    # Rewriting is only needed when a link is missing packetEncoding, type or
+    # security; skip the per-line rewrite entirely when there are none.
     if ! awk -F "$TAB" '
         $1 ~ /^vless:\/\// && $1 !~ /packetEncoding=[^&]/ { found = 1; exit }
+        $1 ~ /^(vless|trojan):\/\// && ($1 !~ /[?&]type=[^&#]/ || $1 !~ /[?&]security=[^&#]/) { found = 1; exit }
         END { exit !found }
     ' "$cache_file" 2>/dev/null; then
         return 0
@@ -125,6 +208,7 @@ sl_sub_cache_normalize() {
     while IFS="$TAB" read -r url title host; do
         [ -n "$url" ] || continue
         url="$(sl_sub_ensure_packet_encoding "$url")"
+        url="$(sl_sub_ensure_transport_security "$url")"
         printf '%s\t%s\t%s\n' "$url" "$title" "$host" >> "$tmp"
     done < "$cache_file"
     mv "$tmp" "$cache_file" 2>/dev/null || { rm -f "$tmp"; return 1; }
@@ -367,6 +451,7 @@ sl_sub_prepare_link() {
     local url="$1" idx="$2"
     url="$(sl_sub_normalize_scheme "$(sl_sub_normalize_url "$url")")"
     url="$(sl_sub_ensure_packet_encoding "$url")"
+    url="$(sl_sub_ensure_transport_security "$url")"
     sl_sub_is_supported "$url" || return 1
     local title host transport
     title="$(sl_sub_extract_title "$url" "Config $idx")"
@@ -477,6 +562,41 @@ function ensure_pe(u,   hpos, base, frag, qpos, prefix, query, n, parts, i, tk, 
     return prefix "?" out frag
 }
 
+function ensure_params(u, scheme,   hpos, base, frag, qpos, prefix, query, n, parts, i, tk, k, v, lk, has_type, has_security, out, dt, ds) {
+    if (scheme != "vless" && scheme != "trojan") return u
+    if (scheme == "trojan") { dt = "tcp"; ds = "tls" } else { dt = "tcp"; ds = "none" }
+    hpos = index(u, "#")
+    if (hpos > 0) { frag = substr(u, hpos); base = substr(u, 1, hpos - 1) }
+    else { frag = ""; base = u }
+    qpos = index(base, "?")
+    if (qpos == 0) return base "?type=" dt "&security=" ds frag
+    prefix = substr(base, 1, qpos - 1)
+    query = substr(base, qpos + 1)
+    n = split(query, parts, "&")
+    has_type = 0
+    has_security = 0
+    out = ""
+    for (i = 1; i <= n; i++) {
+        tk = parts[i]
+        k = tk
+        sub(/=.*/, "", k)
+        v = ""
+        if (index(tk, "=") > 0) v = substr(tk, index(tk, "=") + 1)
+        lk = tolower(k)
+        if (lk == "type") {
+            has_type = 1
+            if (v == "") tk = "type=" dt
+        } else if (lk == "security") {
+            has_security = 1
+            if (v == "") tk = "security=" ds
+        }
+        out = (out == "" ? tk : out "&" tk)
+    }
+    if (!has_type) out = (out == "" ? "" : out "&") "type=" dt
+    if (!has_security) out = (out == "" ? "" : out "&") "security=" ds
+    return prefix "?" out frag
+}
+
 function authority_host(core,   p, i, ch) {
     p = 0
     for (i = 1; i <= length(core); i++) {
@@ -573,6 +693,7 @@ function extract_transport(u, scheme,   rest, tok, p, key, v) {
     gsub(/ /, "%20", line)
 
     if (scheme == "vless") line = ensure_pe(line)
+    if (scheme == "vless" || scheme == "trojan") line = ensure_params(line, scheme)
 
     p = index(line, "#")
     if (p > 0) frag = substr(line, p + 1)

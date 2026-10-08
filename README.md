@@ -1,4 +1,4 @@
-# podkop-smartlink v1.2.3
+# podkop-smartlink v1.2.4
 
 > Следит за VPN-подписками, проверяет сервера и держит [Podkop](https://github.com/itdoginfo/podkop) на рабочем подключении. При проблемах автоматически выбирает здоровую замену.
 
@@ -18,6 +18,14 @@ wget -O - https://raw.githubusercontent.com/itdoginfo/podkop/refs/heads/main/ins
 
 ```sh
 wget -O - https://raw.githubusercontent.com/CriDos/podkop-smartlink/refs/heads/main/_install.sh | sh
+```
+
+## Расширение протоколов (опционально)
+
+Установщик движка: sing-box-lx (XHTTP и др.) или оригинальный sing-box.
+
+```sh
+sh <(wget -qO- https://raw.githubusercontent.com/CriDos/podkop-smartlink/refs/heads/main/_install-singbox.sh)
 ```
 
 ## Удаление
@@ -77,12 +85,4 @@ podkop-smartlink reset_stats         # сброс статистики
 podkop-smartlink get_info            # система (JSON)
 podkop-smartlink get_log             # структурированный лог SmartLink (JSON)
 podkop-smartlink show_version        # версия
-```
-
-## Расширение протоколов (опционально)
-
-sing-box с расширенными протоколами (xhttp и др.):
-
-```sh
-sh <(wget -qO- https://raw.githubusercontent.com/EikeiDev/OpenWRT-sing-box-extended/refs/heads/main/install.sh)
 ```
