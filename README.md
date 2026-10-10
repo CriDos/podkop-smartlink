@@ -22,7 +22,7 @@ wget -O - https://raw.githubusercontent.com/CriDos/podkop-smartlink/refs/heads/m
 
 ## Расширение протоколов (опционально)
 
-Установщик движка: sing-box-lx (XHTTP и др.) или оригинальный sing-box.
+Установщик движка: podkop-engine (XHTTP и др.) или оригинальный sing-box.
 
 ```sh
 sh <(wget -qO- https://raw.githubusercontent.com/CriDos/podkop-smartlink/refs/heads/main/_install-singbox.sh)
