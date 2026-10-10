@@ -1,41 +1,31 @@
 #!/bin/sh
-# Engine installer for OpenWrt: podkop-engine (recommended) or the original
-# sing-box (upstream SagerNet).
+# podkop-engine installer for OpenWrt.
 #
 # Usage (interactive menu):
 #   sh <(wget -qO- https://raw.githubusercontent.com/CriDos/podkop-smartlink/main/_install-singbox.sh)
 #
-# Non-interactive (the menu is shown only when stdin is a TTY):
-#   ENGINE=pdk|pdkfull|upstream sh _install-singbox.sh
-#
-# Environment overrides:
-#   ENGINE=pdk|pdkfull|upstream  engine to install: pinned stable (skips the menu)
-#   VERSION=<ver>                explicit version (skips the GitHub query)
-#   MENU=1|0                     force/disable the menu (0 also useful for cron)
-#   DEST_FILE=/usr/bin/sing-box  target path (upstream binary replace only)
-#   SERVICE=podkop               service to stop/start (default: auto-detect podkop/sing-box, empty = skip)
+# Non-interactive (installs the pinned recommended version; the menu is shown
+# only when stdin is a TTY):
+#   sh _install-singbox.sh
+#   VERSION=1.14.2-r13 sh _install-singbox.sh
 #
 # podkop-engine is FiyeroT's patched sing-box build for podkop (xhttp
 # transport, tools.decode-link, urltest fallbacks, memory failsafes):
 # https://github.com/FiyeroT/podkop-engine
-# It ships as an OpenWrt package (.apk on 25.12+, .ipk on 24.10 and older) and
-# is installed through the package manager; a stock sing-box package present
-# in the database is removed first (podkop-engine provides sing-box).
-# Upstream sing-box releases (raw binary replace):
-# https://github.com/SagerNet/sing-box
+# An old engine package (sing-box, sing-box-extended, ...) must be removed
+# first: opkg remove --force-depends <name> / apk del <name>.
 
 [ -f /etc/openwrt_release ] || { echo "Error: this is not OpenWrt."; exit 1; }
 . /etc/openwrt_release
 
-DEST_FILE="${DEST_FILE:-/usr/bin/sing-box}"
-ENGINE="${ENGINE:-}"
 SERVICE_STOPPED=0
 MIRROR_PREFIX="https://ghproxy.net/"
 WORK_DIR="/tmp/engine-install"
 PDK_REPO="FiyeroT/podkop-engine"
-UP_REPO="SagerNet/sing-box"
 RECOMMENDED_PDK="1.14.2-r13"
-RECOMMENDED_UP="1.14.2"
+DEST_FILE="/usr/bin/sing-box"
+TMP_NEED_KB=25000
+ROOT_NEED_KB=26000
 
 R=""; G=""; Y=""; N=""
 if [ -t 1 ]; then
@@ -43,7 +33,8 @@ if [ -t 1 ]; then
 fi
 say()  { printf "$G[*]${N} %s\n" "$1"; }
 warn() { printf "$Y[!]${N} %s\n" "$1"; }
-die()  { printf "$R[x]${N} %s\n" "$1"; rm -f "${DEST_FILE}.tmp"; rm -rf "$WORK_DIR"; exit 1; }
+die()  { printf "$R[x]${N} %s\n" "$1"; rm -rf "$WORK_DIR"; exit 1; }
+free_kb() { df -Pk "$1" 2>/dev/null | awk 'NR==2 {print $4}'; }
 
 PKG=""
 PKG_EXT=""
@@ -51,18 +42,9 @@ if command -v apk >/dev/null 2>&1; then
     PKG="apk"; PKG_EXT="apk"
 elif command -v opkg >/dev/null 2>&1; then
     PKG="opkg"; PKG_EXT="ipk"
+else
+    die "Neither apk nor opkg found."
 fi
-
-# Only the upstream tarball needs an arch mapping; podkop-engine assets use
-# the OpenWrt pkgarch ($DISTRIB_ARCH) verbatim.
-UP_ARCH=""
-case "$DISTRIB_ARCH" in
-    aarch64*)                              UP_ARCH="arm64-musl" ;;
-    arm_cortex-a7*|arm_cortex-a9*|arm_cortex-a15*) UP_ARCH="armv7-musl" ;;
-    x86_64)                                UP_ARCH="amd64-musl" ;;
-    mipsel_24kc|mipsel_*)                  UP_ARCH="mipsle-softfloat-musl" ;;
-    mips_24kc|mips_*)                      UP_ARCH="mips-softfloat-musl" ;;
-esac
 
 fetch() { # stdout
     if command -v curl >/dev/null 2>&1; then
@@ -96,116 +78,37 @@ github_latest_pdk() {
     fi
 }
 
-# Latest stable upstream sing-box tag (without the leading v).
-github_latest_upstream() {
-    local rel ver
-    rel=$(fetch "https://api.github.com/repos/$UP_REPO/releases/latest" 2>/dev/null) || return 1
-    [ -n "$rel" ] || return 1
-    ver=$(printf '%s' "$rel" | grep '"tag_name"' | awk -F'"' '{print $4}' | head -n 1)
-    [ -n "$ver" ] || return 1
-    printf '%s' "$ver" | sed 's/^v//'
-}
-
-choose_interactively() {
-    local pdk_latest up_latest choice
+VERSION="${VERSION:-}"
+if [ -z "$VERSION" ] && [ -t 0 ]; then
     say "Querying GitHub for the latest releases..."
     pdk_latest=$(github_latest_pdk 2>/dev/null || true)
-    up_latest=$(github_latest_upstream 2>/dev/null || true)
     [ -n "$pdk_latest" ] || pdk_latest="unavailable"
-    [ -n "$up_latest" ] || up_latest="unavailable"
 
     printf '\nSelect what to install:\n'
     printf '  1) podkop-engine %s (recommended)\n' "$RECOMMENDED_PDK"
     printf '  2) podkop-engine latest stable (%s)\n' "$pdk_latest"
-    printf '  3) podkop-engine-full latest stable (%s)\n' "$pdk_latest"
-    printf '  4) sing-box (original) latest stable (%s)\n' "$up_latest"
     printf 'Choice [1]: '
     read -r choice || choice=""
     case "$choice" in
-        2) ENGINE="pdk"; VERSION="$pdk_latest" ;;
-        3) ENGINE="pdkfull"; VERSION="$pdk_latest" ;;
-        4) ENGINE="upstream"; VERSION="$up_latest" ;;
-        *) ENGINE="pdk"; VERSION="$RECOMMENDED_PDK" ;;
+        2) VERSION="$pdk_latest" ;;
+        *) VERSION="$RECOMMENDED_PDK" ;;
     esac
     if [ "$VERSION" = "unavailable" ]; then
-        case "$ENGINE" in
-            pdk)
-                warn "GitHub API unavailable, falling back to pinned version $RECOMMENDED_PDK."
-                VERSION="$RECOMMENDED_PDK" ;;
-            *) die "No usable version selected." ;;
-        esac
+        warn "GitHub API unavailable, falling back to pinned version $RECOMMENDED_PDK."
+        VERSION="$RECOMMENDED_PDK"
     fi
-}
-
-menu_enabled=0
-if [ "${MENU-}" = "1" ]; then
-    menu_enabled=1
-elif [ "${MENU-}" = "0" ]; then
-    menu_enabled=0
-elif [ -t 0 ]; then
-    menu_enabled=1
 fi
+[ -n "$VERSION" ] || VERSION="$RECOMMENDED_PDK"
 
-if [ -z "$ENGINE" ] && [ "$menu_enabled" = "1" ]; then
-    choose_interactively
-fi
-
-[ -n "$ENGINE" ] || ENGINE="pdk"
-
-if [ -z "$VERSION" ]; then
-    case "$ENGINE" in
-        pdk)
-            VERSION=$(github_latest_pdk 2>/dev/null || true)
-            if [ -z "$VERSION" ]; then
-                warn "GitHub API unavailable, falling back to pinned version $RECOMMENDED_PDK."
-                VERSION="$RECOMMENDED_PDK"
-            fi
-            ;;
-        pdkfull)
-            VERSION=$(github_latest_pdk 2>/dev/null || true)
-            [ -n "$VERSION" ] || die "GitHub API unavailable, cannot resolve the podkop-engine-full version."
-            ;;
-        upstream)
-            VERSION=$(github_latest_upstream 2>/dev/null || true)
-            if [ -z "$VERSION" ]; then
-                warn "GitHub API unavailable, falling back to pinned version $RECOMMENDED_UP."
-                VERSION="$RECOMMENDED_UP"
-            fi
-            ;;
-        *) die "Unknown ENGINE '$ENGINE' (expected pdk, pdkfull or upstream)." ;;
-    esac
-fi
-
-case "$ENGINE" in
-    pdk|pdkfull)
-        [ -n "$PKG" ] || die "Neither apk nor opkg found; cannot install the podkop-engine package."
-        DEST_FILE="/usr/bin/sing-box" # the package owns this path
-        PKG_NAME="podkop-engine"
-        [ "$ENGINE" = "pdkfull" ] && PKG_NAME="podkop-engine-full"
-        # Installed-size estimate: the slim arm64 binary is ~22.5 MB, the full
-        # build ~30 MB, plus a small margin.
-        ROOT_NEED_KB=26000
-        [ "$ENGINE" = "pdkfull" ] && ROOT_NEED_KB=34000
-        ASSET="${PKG_NAME}_${VERSION}_openwrt_${DISTRIB_ARCH}.${PKG_EXT}"
-        ;;
-    upstream)
-        [ -n "$UP_ARCH" ] || die "Architecture $DISTRIB_ARCH has no upstream sing-box build."
-        ASSET="sing-box-$VERSION-linux-$UP_ARCH.tar.gz"
-        ;;
-    *) die "Unknown ENGINE '$ENGINE' (expected pdk, pdkfull or upstream)." ;;
-esac
-REPO="$PDK_REPO"
-[ "$ENGINE" = "upstream" ] && REPO="$UP_REPO"
-BASE_URL="https://github.com/$REPO/releases/download/v$VERSION"
+ASSET="podkop-engine_${VERSION}_openwrt_${DISTRIB_ARCH}.${PKG_EXT}"
+BASE_URL="https://github.com/$PDK_REPO/releases/download/v$VERSION"
 URL="$BASE_URL/$ASSET"
-say "Engine: $ENGINE, version: $VERSION, asset: $ASSET"
+say "Engine: podkop-engine, version: $VERSION, asset: $ASSET"
 
-TMP_NEED_KB=25000
-[ "$ENGINE" = "upstream" ] && TMP_NEED_KB=130000
-TMP_FREE=$(df -Pk /tmp 2>/dev/null | awk 'NR==2 {print $4}')
+TMP_FREE=$(free_kb /tmp)
 [ -z "$TMP_FREE" ] && TMP_FREE=0
 if [ "$TMP_FREE" -lt "$TMP_NEED_KB" ]; then
-    ROOT_FREE=$(df -Pk /root 2>/dev/null | awk 'NR==2 {print $4}')
+    ROOT_FREE=$(free_kb /root)
     [ -z "$ROOT_FREE" ] && ROOT_FREE=0
     if [ "$ROOT_FREE" -ge "$TMP_NEED_KB" ]; then
         WORK_DIR="/root/engine-install"
@@ -224,45 +127,20 @@ if ! download "$URL" "$WORK_DIR/$ASSET"; then
 fi
 [ -s "$WORK_DIR/$ASSET" ] || die "Downloaded file is empty."
 
-if [ "$ENGINE" = "upstream" ]; then
-    say "Verifying sha256..."
-    SUMS=$(fetch "$BASE_URL/SHA256SUMS" 2>/dev/null || true)
-    EXPECTED=$(printf '%s\n' "$SUMS" | awk -v f="$ASSET" '$2 == f {print $1}' | head -n 1)
-    if [ -n "$EXPECTED" ] && command -v sha256sum >/dev/null 2>&1; then
-        ACTUAL=$(sha256sum "$WORK_DIR/$ASSET" | awk '{print $1}')
-        [ "$EXPECTED" = "$ACTUAL" ] || die "sha256 mismatch: expected $EXPECTED, got $ACTUAL."
-        say "sha256 OK."
-    elif command -v sha256sum >/dev/null 2>&1; then
-        ACTUAL=$(sha256sum "$WORK_DIR/$ASSET" | awk '{print $1}')
-        warn "No official checksums published; downloaded archive sha256: $ACTUAL"
-    else
-        warn "sha256sum missing - skipping verification."
-    fi
-
-    say "Extracting..."
-    tar -xzf "$WORK_DIR/$ASSET" -C "$WORK_DIR" || die "Failed to extract the archive."
-    BIN=$(find "$WORK_DIR" -type f -name sing-box | head -n 1)
-    [ -n "$BIN" ] || die "sing-box binary not found in the archive."
-    rm -f "$WORK_DIR/$ASSET"
-    NEW_VER=$("$BIN" version 2>/dev/null | head -n 1)
-    [ -n "$NEW_VER" ] || die "The downloaded binary does not run on this system."
-    BIN_BYTES=$(wc -c < "$BIN")
+say "Verifying sha256..."
+SUMS=$(fetch "$BASE_URL/SHA256SUMS" 2>/dev/null || true)
+EXPECTED=$(printf '%s\n' "$SUMS" | awk -v f="$ASSET" '$2 == f {print $1}' | head -n 1)
+if [ -n "$SUMS" ] && [ -z "$EXPECTED" ]; then
+    die "No $ASSET in SHA256SUMS - no podkop-engine build for $DISTRIB_ARCH."
+fi
+if [ -n "$EXPECTED" ] && command -v sha256sum >/dev/null 2>&1; then
+    ACTUAL=$(sha256sum "$WORK_DIR/$ASSET" | awk '{print $1}')
+    [ "$EXPECTED" = "$ACTUAL" ] || die "sha256 mismatch: expected $EXPECTED, got $ACTUAL."
+    say "sha256 OK."
+elif [ -z "$SUMS" ]; then
+    warn "SHA256SUMS unavailable - skipping verification."
 else
-    say "Verifying sha256..."
-    SUMS=$(fetch "$BASE_URL/SHA256SUMS" 2>/dev/null || true)
-    EXPECTED=$(printf '%s\n' "$SUMS" | awk -v f="$ASSET" '$2 == f {print $1}' | head -n 1)
-    if [ -n "$SUMS" ] && [ -z "$EXPECTED" ]; then
-        die "No $ASSET in SHA256SUMS - no podkop-engine build for $DISTRIB_ARCH."
-    fi
-    if [ -n "$EXPECTED" ] && command -v sha256sum >/dev/null 2>&1; then
-        ACTUAL=$(sha256sum "$WORK_DIR/$ASSET" | awk '{print $1}')
-        [ "$EXPECTED" = "$ACTUAL" ] || die "sha256 mismatch: expected $EXPECTED, got $ACTUAL."
-        say "sha256 OK."
-    elif [ -z "$SUMS" ]; then
-        warn "SHA256SUMS unavailable - skipping verification."
-    else
-        warn "sha256sum missing - skipping verification."
-    fi
+    warn "sha256sum missing - skipping verification."
 fi
 
 if [ -f "$DEST_FILE" ]; then
@@ -270,31 +148,27 @@ if [ -f "$DEST_FILE" ]; then
     say "Current binary: ${OLD_VER:-unknown}"
 fi
 
-# Pre-flight: the destination filesystem must hold the new binary plus a
-# small margin, counting the space the old binary frees (measured before the
-# service is stopped so a full disk cannot leave the router without a running
-# engine). For upstream the size is the extracted binary; for podkop-engine a
-# fixed estimate (the package size varies by arch).
-DEST_DIR=$(dirname "$DEST_FILE")
-mkdir -p "$DEST_DIR" 2>/dev/null || true
+# Pre-flight: the destination filesystem must hold the new binary (~22.5 MB)
+# plus a small margin, counting the space the old binary frees. Checked
+# before the service is stopped so a full disk cannot leave the router
+# without a running engine.
 DEST_OLD_KB=0
 if [ -f "$DEST_FILE" ]; then
     DEST_OLD_BYTES=$(wc -c < "$DEST_FILE" 2>/dev/null || echo 0)
     DEST_OLD_KB=$(( DEST_OLD_BYTES / 1024 ))
 fi
-DEST_FREE_KB=$(df -Pk "$DEST_DIR" 2>/dev/null | awk 'NR==2 {print $4}')
+DEST_FREE_KB=$(free_kb "$(dirname "$DEST_FILE")")
 [ -z "$DEST_FREE_KB" ] && DEST_FREE_KB=0
-if [ "$ENGINE" = "upstream" ]; then
-    BIN_KB=$(( (BIN_BYTES + 1023) / 1024 ))
-    NEED_KB=$(( BIN_KB + 2048 ))
-else
-    NEED_KB=$ROOT_NEED_KB
-fi
 AVAIL_KB=$(( DEST_FREE_KB + DEST_OLD_KB ))
-if [ "$AVAIL_KB" -lt "$NEED_KB" ]; then
-    die "Not enough space in $DEST_DIR: need ~$(( NEED_KB / 1024 )) MB, available ~$(( AVAIL_KB / 1024 )) MB (free $(( DEST_FREE_KB / 1024 )) MB + old binary $(( DEST_OLD_KB / 1024 )) MB)."
+if [ "$AVAIL_KB" -lt "$ROOT_NEED_KB" ]; then
+    die "Not enough space in $(dirname "$DEST_FILE"): need ~$(( ROOT_NEED_KB / 1024 )) MB, available ~$(( AVAIL_KB / 1024 )) MB (free $(( DEST_FREE_KB / 1024 )) MB + old binary $(( DEST_OLD_KB / 1024 )) MB)."
 fi
 
+if [ "${SERVICE-unset}" = "unset" ]; then
+    if [ -f /etc/init.d/podkop ]; then SERVICE="podkop"
+    elif [ -f /etc/init.d/sing-box ]; then SERVICE="sing-box"
+    else SERVICE=""; fi
+fi
 if [ -n "$SERVICE" ] && [ -x "/etc/init.d/$SERVICE" ]; then
     say "Stopping $SERVICE..."
     "/etc/init.d/$SERVICE" stop >/dev/null 2>&1
@@ -303,39 +177,15 @@ if [ -n "$SERVICE" ] && [ -x "/etc/init.d/$SERVICE" ]; then
     SERVICE_STOPPED=1
 fi
 
-if [ "$ENGINE" = "upstream" ]; then
-    say "Installing $DEST_FILE..."
-    rm -f "$DEST_FILE" "${DEST_FILE}.tmp"
-    cp -f "$BIN" "${DEST_FILE}.tmp" || die "Failed to write ${DEST_FILE}.tmp (out of space?)."
-    chmod +x "${DEST_FILE}.tmp"
-    mv -f "${DEST_FILE}.tmp" "$DEST_FILE" || die "Failed to replace $DEST_FILE."
+# The package managers check free space without knowing the old raw binary
+# will be replaced, so remove it up front.
+rm -f "$DEST_FILE"
+
+say "Installing the podkop-engine package..."
+if [ "$PKG" = "apk" ]; then
+    apk add --allow-untrusted --force-reinstall "$WORK_DIR/$ASSET" || die "apk add failed - an old engine package may still be installed (apk del <name>)."
 else
-    # The package managers check free space without knowing the old raw
-    # binary will be replaced, so remove it up front. Any other engine
-    # package (sing-box, sing-box-extended, ...) owns the same files and
-    # must go first.
-    rm -f "$DEST_FILE"
-    if [ "$PKG" = "apk" ]; then
-        OLD_PKGS=$(apk info 2>/dev/null | grep '^sing-box' || true)
-        if [ -n "$OLD_PKGS" ]; then
-            say "Removing the installed engine package(s): $(echo $OLD_PKGS)"
-            for p in $OLD_PKGS; do
-                apk del "$p" >/dev/null 2>&1 || warn "apk del $p failed (continuing)."
-            done
-        fi
-        say "Installing the $PKG_NAME package..."
-        apk add --allow-untrusted --force-reinstall "$WORK_DIR/$ASSET" || die "apk add failed."
-    else
-        OLD_PKGS=$(opkg list-installed 2>/dev/null | awk '{print $1}' | grep '^sing-box' || true)
-        if [ -n "$OLD_PKGS" ]; then
-            say "Removing the installed engine package(s): $(echo $OLD_PKGS)"
-            for p in $OLD_PKGS; do
-                opkg remove --force-depends "$p" >/dev/null 2>&1 || warn "opkg remove $p failed (continuing)."
-            done
-        fi
-        say "Installing the $PKG_NAME package..."
-        opkg install --force-reinstall "$WORK_DIR/$ASSET" || die "opkg install failed (not enough space in /overlay?)."
-    fi
+    opkg install --force-reinstall "$WORK_DIR/$ASSET" || die "opkg install failed - an old engine package may still be installed (opkg remove --force-depends <name>), or /overlay is out of space."
 fi
 
 # EikeiDev UPX variant leftovers: the real binary lives elsewhere and this
@@ -344,6 +194,9 @@ rm -f /usr/libexec/sing-box-core /etc/sing-box-version.cache
 
 INSTALLED=$("$DEST_FILE" version 2>/dev/null | head -n 1)
 say "Installed: ${INSTALLED:-failed to get the version}"
+if ! "$DEST_FILE" version 2>/dev/null | grep -q "tools.decode-link"; then
+    warn "The installed engine does not report tools.decode-link - xhttp links will not work with podkop."
+fi
 
 if [ -n "$SERVICE" ] && [ -x "/etc/init.d/$SERVICE" ]; then
     say "Starting $SERVICE..."
@@ -352,5 +205,11 @@ if [ -n "$SERVICE" ] && [ -x "/etc/init.d/$SERVICE" ]; then
     else
         warn "Failed to start $SERVICE, check the logs."
     fi
+fi
+
+# Pick up the new engine capabilities in the SmartLink daemon (xhttp support
+# is detected once per process).
+if [ -x /etc/init.d/podkop-smartlink ]; then
+    /etc/init.d/podkop-smartlink restart >/dev/null 2>&1
 fi
 say "Done."
