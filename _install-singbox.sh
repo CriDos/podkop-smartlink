@@ -307,20 +307,23 @@ if [ "$ENGINE" = "upstream" ]; then
     chmod +x "${DEST_FILE}.tmp"
     mv -f "${DEST_FILE}.tmp" "$DEST_FILE" || die "Failed to replace $DEST_FILE."
 else
+    # The package managers check free space without knowing the old raw
+    # binary will be replaced, so remove it up front.
+    rm -f "$DEST_FILE"
     if [ "$PKG" = "apk" ]; then
         if apk info 2>/dev/null | grep -q '^sing-box$'; then
             say "Removing the installed sing-box package..."
             apk del sing-box >/dev/null 2>&1 || warn "apk del sing-box failed (continuing)."
         fi
         say "Installing the $PKG_NAME package..."
-        apk add --allow-untrusted "$WORK_DIR/$ASSET" || die "apk add failed."
+        apk add --allow-untrusted --force-reinstall "$WORK_DIR/$ASSET" || die "apk add failed."
     else
         if opkg list-installed 2>/dev/null | grep -q '^sing-box '; then
             say "Removing the installed sing-box package..."
             opkg remove --force-depends sing-box >/dev/null 2>&1 || warn "opkg remove sing-box failed (continuing)."
         fi
         say "Installing the $PKG_NAME package..."
-        opkg install "$WORK_DIR/$ASSET" || die "opkg install failed."
+        opkg install --force-reinstall "$WORK_DIR/$ASSET" || die "opkg install failed (not enough space in /overlay?)."
     fi
 fi
 
