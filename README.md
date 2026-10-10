@@ -20,9 +20,11 @@ wget -O - https://raw.githubusercontent.com/itdoginfo/podkop/refs/heads/main/ins
 wget -O - https://raw.githubusercontent.com/CriDos/podkop-smartlink/refs/heads/main/_install.sh | sh
 ```
 
-## Расширение протоколов (опционально)
+## Расширенные протоколы (опционально)
 
-Установщик движка: podkop-engine (XHTTP и др.) или оригинальный sing-box.
+Установщик движка: [podkop-engine](https://github.com/FiyeroT/podkop-engine) — пропатченный sing-box для Podkop. Поддерживает VLESS (транспорт XHTTP, REALITY, uTLS), Trojan, Shadowsocks, Hysteria2, TUIC и SOCKS, группы Selector/URLTest (с fallbacks), Clash API и проверку ссылок через `sing-box tools decode-link`.
+
+SmartLink определяет поддержку протоколов автоматически: с podkop-engine r11+ ссылки с XHTTP-транспортом добавляются сами, на обычном sing-box они отфильтровываются.
 
 ```sh
 sh <(wget -qO- https://raw.githubusercontent.com/CriDos/podkop-smartlink/refs/heads/main/_install-singbox.sh)
@@ -53,7 +55,6 @@ LuCI: **Services → Podkop SmartLink**
 ### Настройки
 
 - **Обновление подписок** — как часто скачивать подписки и обновлять список серверов.
-- **Расширенные транспорты** — показывает XHTTP и другие новые типы подключений, если sing-box их поддерживает.
 - **Учитывать порядок подписок** — при автозамене выбирать из подписок выше по списку.
 - **Мониторинг выбранного сервера** — интервал проверки текущего сервера, максимальный пинг и количество проблем подряд до замены.
 - **Stats ping** — фоновый пинг всех серверов для таблицы и статистики. Не влияет на автопереключение.

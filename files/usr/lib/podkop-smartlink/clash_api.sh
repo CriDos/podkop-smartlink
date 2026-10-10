@@ -33,6 +33,23 @@ sl_clash_redetect() {
     sl_clash_detect
 }
 
+# True when the installed sing-box reports "tools.decode-link" in the
+# "Features:" line of `sing-box version` (podkop-engine r11+). Podkop decodes
+# xhttp links via `sing-box tools decode-link` and fatally aborts config
+# generation when the feature is missing (leaving sing-box stopped), so
+# SmartLink must not publish xhttp links to such engines. Cached per process.
+sl_engine_has_xhttp() {
+    [ "$_SL_ENGINE_XHTTP" = "1" ] && return 0
+    [ "$_SL_ENGINE_XHTTP" = "0" ] && return 1
+    local features
+    features="$(sing-box version 2>/dev/null | sed -n 's/^Features:[[:space:]]*//p')"
+    case ",$features," in
+        *",tools.decode-link,"*) _SL_ENGINE_XHTTP=1; return 0 ;;
+    esac
+    _SL_ENGINE_XHTTP=0
+    return 1
+}
+
 # Internal: curl with auth, returns body + http code on last line.
 _sl_clash_curl() {
     local method="$1" path="$2" data="$3"

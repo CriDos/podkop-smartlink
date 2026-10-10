@@ -53,6 +53,18 @@ sl_cfg_load() {
     SL_CFG_PING_TIMEOUT="$(sl_cfg_int ping_timeout "$DEFAULT_PING_TIMEOUT")"
     SL_CFG_TEST_URL="$(sl_cfg test_url "$DEFAULT_TEST_URL")"
     SL_CFG_STATS_PING_INTERVAL="$(sl_cfg_int ping_all_interval "$DEFAULT_STATS_PING_INTERVAL")"
-    SL_CFG_XHTTP="$(sl_cfg_bool xhttp 0)"
+    # XHTTP links need an engine with tools.decode-link (podkop-engine r11+);
+    # podkop fatally aborts config generation otherwise (and leaves sing-box
+    # stopped), so support is auto-detected and unsupported links are
+    # filtered out instead of being configurable.
+    if sl_engine_has_xhttp; then
+        SL_CFG_XHTTP=1
+    else
+        [ "${SL_CFG_XHTTP_WARNED:-0}" = "1" ] || {
+            log "Engine does not support XHTTP (podkop-engine r11+ required); such links are filtered out" "warn"
+            SL_CFG_XHTTP_WARNED=1
+        }
+        SL_CFG_XHTTP=0
+    fi
     SL_CFG_USE_PRIORITY="$(sl_cfg_bool use_priority "$DEFAULT_USE_PRIORITY")"
 }

@@ -16,8 +16,6 @@ var I18N = {
     tabLog: "Лог",
     updateInterval: "Обновление подписок",
     updateIntervalDesc: "Как часто скачивать подписки и обновлять список серверов.",
-    xhttp: "Расширенные транспорты",
-    xhttpDesc: "Показывать XHTTP и другие новые типы подключений. Включайте, если ваш sing-box их поддерживает.",
     usePriority: "Учитывать порядок подписок",
     usePriorityDesc: "При автозамене выбирать из подписок выше по списку.",
     selectedServerMonitoring: "Мониторинг выбранного сервера",
@@ -109,8 +107,6 @@ var I18N = {
     tabLog: "Log",
     updateInterval: "Subscription update",
     updateIntervalDesc: "How often to reread subscriptions and update the server list.",
-    xhttp: "New transports",
-    xhttpDesc: "Keep links with newer transports, such as XHTTP. Requires sing-box extended.",
     usePriority: "Respect subscription order",
     usePriorityDesc: "When replacing a server, look for a healthy server in higher subscriptions first.",
     selectedServerMonitoring: "Selected server monitoring",
@@ -1693,10 +1689,6 @@ var SmartlinkView = view.extend({
     o.value("7d", "7 " + (LANG === "ru" ? "д" : "d"));
     o.default = "24h"; o.rmempty = false;
     o.description = t("updateIntervalDesc");
-
-    o = s.option(form.Flag, "xhttp", t("xhttp"));
-    o.rmempty = false;
-    o.description = t("xhttpDesc");
 
     o = s.option(form.Flag, "use_priority", t("usePriority"));
     o.rmempty = false;

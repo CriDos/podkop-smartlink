@@ -5,6 +5,10 @@ rm -f /tmp/luci-indexcache*
 
 [ -x /etc/init.d/rpcd ] && /etc/init.d/rpcd reload
 
+# The xhttp option was replaced by automatic engine detection.
+uci -q delete podkop-smartlink.main.xhttp
+uci -q commit podkop-smartlink
+
 logger -t "podkop-smartlink" "uci-defaults script executed"
 
 exit 0
