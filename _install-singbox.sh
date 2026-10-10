@@ -36,7 +36,6 @@ PDK_REPO="FiyeroT/podkop-engine"
 UP_REPO="SagerNet/sing-box"
 RECOMMENDED_PDK="1.14.2-r13"
 RECOMMENDED_UP="1.14.2"
-ROOT_NEED_KB=40000
 
 R=""; G=""; Y=""; N=""
 if [ -t 1 ]; then
@@ -183,6 +182,10 @@ case "$ENGINE" in
         DEST_FILE="/usr/bin/sing-box" # the package owns this path
         PKG_NAME="podkop-engine"
         [ "$ENGINE" = "pdkfull" ] && PKG_NAME="podkop-engine-full"
+        # Installed-size estimate: the slim arm64 binary is ~22.5 MB, the full
+        # build ~30 MB, plus a small margin.
+        ROOT_NEED_KB=26000
+        [ "$ENGINE" = "pdkfull" ] && ROOT_NEED_KB=34000
         ASSET="${PKG_NAME}_${VERSION}_openwrt_${DISTRIB_ARCH}.${PKG_EXT}"
         ;;
     upstream)
