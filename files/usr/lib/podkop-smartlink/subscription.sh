@@ -292,11 +292,6 @@ sl_sub_is_ip() {
     return 1
 }
 
-# DNS probing for subscription imports: parallel batches with a hard per-wave
-# timeout, so a slow or dead resolver cannot stall the whole import.
-SL_RESOLVE_BATCH=10
-SL_RESOLVE_TIMEOUT=5
-
 # Check if a host resolves via DNS (skips IP addresses).
 # Busybox nslookup has no timeout option; the caller bounds it (see
 # sl_sub_resolve_batch) when many hosts are probed at once.
@@ -307,14 +302,14 @@ sl_sub_host_resolvable() {
     nslookup "$host" 127.0.0.1 >/dev/null 2>&1 || ping -c1 -W2 "$host" >/dev/null 2>&1
 }
 
-# Wait for a probe wave; a watchdog kills stragglers after the timeout so a
-# hung resolver cannot stall the wave (busybox sleep has no sub-second
-# resolution and nslookup has no timeout option).
-# Args: <pids>
-_sl_sub_resolve_wait() {
-    local pids="$1" watchdog pid
+# Wait for a probe wave; a watchdog kills stragglers after <timeout> seconds
+# so a hung resolver or engine probe cannot stall the wave (busybox sleep has
+# no sub-second resolution; nslookup/decode-link have no timeout option).
+# Args: <pids> <timeout_sec>
+_sl_sub_wait_wave() {
+    local pids="$1" timeout="$2" watchdog pid
     [ -n "$pids" ] || return 0
-    ( sleep "$SL_RESOLVE_TIMEOUT"
+    ( sleep "$timeout"
       kill $pids 2>/dev/null
     ) </dev/null >/dev/null 2>&1 &
     watchdog=$!
@@ -356,12 +351,12 @@ sl_sub_resolve_batch() {
         pids="$pids $!"
         count=$((count + 1))
         if [ "$count" -ge "$SL_RESOLVE_BATCH" ]; then
-            _sl_sub_resolve_wait "$pids"
+            _sl_sub_wait_wave "$pids" "$SL_RESOLVE_TIMEOUT"
             pids=""
             count=0
         fi
     done < "$pending_file"
-    [ -n "$pids" ] && _sl_sub_resolve_wait "$pids"
+    [ -n "$pids" ] && _sl_sub_wait_wave "$pids" "$SL_RESOLVE_TIMEOUT"
 
     local ok
     while IFS= read -r host || [ -n "$host" ]; do
@@ -442,6 +437,43 @@ sl_sub_transport_supported() {
     return 1
 }
 
+# Check the VLESS encryption parameter. Xray 25.x added VLESS Encryption
+# (encryption=mlkem768x25519plus...); sing-box (including podkop-engine)
+# does not implement it and podkop fatally aborts on such links, so they
+# are dropped at import. Absent or "none" is fine.
+sl_sub_vless_encryption_ok() {
+    local rest tok key val
+    case "$1" in
+        vless://*) ;;
+        *) return 0 ;;
+    esac
+    case "$1" in
+        *\?*) rest="${1#*\?}" ;;
+        *) return 0 ;;
+    esac
+    rest="${rest%%#*}"
+    while [ -n "$rest" ]; do
+        tok="${rest%%&*}"
+        case "$rest" in
+            *\&*) rest="${rest#*\&}" ;;
+            *) rest="" ;;
+        esac
+        key="${tok%%=*}"
+        case "$key" in *[A-Z]*) key="$(printf '%s' "$key" | tr 'A-Z' 'a-z')" ;; esac
+        if [ "$key" = "encryption" ]; then
+            case "$tok" in
+                *=*) val="${tok#*=}" ;;
+                *) val="" ;;
+            esac
+            case "$val" in *[A-Z]*) val="$(printf '%s' "$val" | tr 'A-Z' 'a-z')" ;; esac
+            [ -z "$val" ] && return 0
+            [ "$val" = "none" ] && return 0
+            return 1
+        fi
+    done
+    return 0
+}
+
 # Prepare a proxy link for import: normalize, check scheme/transport.
 # No DNS here — hosts are resolved separately (in parallel batches) so a slow
 # resolver cannot serialize the import.
@@ -453,17 +485,10 @@ sl_sub_prepare_link() {
     url="$(sl_sub_ensure_packet_encoding "$url")"
     url="$(sl_sub_ensure_transport_security "$url")"
     sl_sub_is_supported "$url" || return 1
-    local title host transport
+    local title host
     title="$(sl_sub_extract_title "$url" "Config $idx")"
     host="$(sl_sub_extract_host "$url")"
     [ -n "$host" ] || return 1
-    if [ "$SL_CFG_XHTTP" != "1" ]; then
-        transport="$(sl_sub_extract_transport "$url")"
-        if ! sl_sub_transport_supported "$transport"; then
-            log "Skipping unsupported transport '$transport': $title" "debug"
-            return 1
-        fi
-    fi
     printf '%s\t%s\t%s' "$url" "$title" "$host"
     return 0
 }
@@ -490,12 +515,12 @@ sl_sub_process_link() {
 }
 
 # Single-pass awk parser for subscription imports. Mirrors sl_sub_prepare_link
-# exactly (normalize, VLESS packetEncoding, title decode, host and transport
-# extraction) with one process per subscription instead of ~10 forks per link.
-# Unsupported links are dropped silently; transport skips are written to the
-# skip file, one message per line.
+# exactly (normalize, VLESS packetEncoding, title decode, host extraction)
+# with one process per subscription instead of ~10 forks per link.
+# Unsupported links are dropped silently; engine compatibility is enforced
+# later by the publish gate.
 _SL_SUB_PREPARE_PROGRAM='
-BEGIN { idx = start + 0; q = sprintf("%c", 39); OFS = "\t" }
+BEGIN { idx = start + 0; OFS = "\t" }
 
 function hx(c) {
     if (c >= "0" && c <= "9") return c + 0
@@ -658,25 +683,6 @@ function extract_host(u, scheme,   p, core, dec, pad) {
     return authority_host(core)
 }
 
-function extract_transport(u, scheme,   rest, tok, p, key, v) {
-    if (scheme == "ss" || scheme == "hy2" || scheme == "hysteria2" || scheme == "socks" || scheme == "socks4" || scheme == "socks5") return "tcp"
-    p = index(u, "?")
-    if (p == 0) return "tcp"
-    rest = substr(u, p + 1)
-    p = index(rest, "#")
-    if (p > 0) rest = substr(rest, 1, p - 1)
-    while (rest != "") {
-        p = index(rest, "&")
-        if (p > 0) { tok = substr(rest, 1, p - 1); rest = substr(rest, p + 1) }
-        else { tok = rest; rest = "" }
-        p = index(tok, "=")
-        if (p > 0) { key = substr(tok, 1, p - 1); v = substr(tok, p + 1) }
-        else { key = tok; v = "" }
-        if (tolower(key) == "type") return (tolower(v) == "" ? "tcp" : tolower(v))
-    }
-    return "tcp"
-}
-
 {
     line = $0
     sub(/^[[:space:]]+/, "", line)
@@ -705,29 +711,17 @@ function extract_transport(u, scheme,   rest, tok, p, key, v) {
     host = extract_host(line, scheme)
     if (host == "") next
 
-    if (xhttp != "1") {
-        tr = extract_transport(line, scheme)
-        if (index(" " transports " ", " " tr " ") == 0) {
-            print "Skipping unsupported transport " q tr q ": " title > skipfile
-            next
-        }
-    }
-
     print line, title, host
     idx++
 }
 '
 
 # Parse a decoded subscription file into prepared "<url>\t<title>\t<host>"
-# rows (see _SL_SUB_PREPARE_PROGRAM). Transport skips are appended to
-# skip_file. Args: <in_file> <out_file> <skip_file> <start_idx>
+# rows (see _SL_SUB_PREPARE_PROGRAM). Args: <in_file> <out_file> <start_idx>
 _sl_sub_prepare_stream() {
-    local in_file="$1" out_file="$2" skip_file="$3" start_idx="$4"
+    local in_file="$1" out_file="$2" start_idx="$3"
     : > "$out_file"
-    : > "$skip_file"
-    awk -v start="$start_idx" -v xhttp="$SL_CFG_XHTTP" \
-        -v transports="$SUPPORTED_TRANSPORTS" -v skipfile="$skip_file" \
-        "$_SL_SUB_PREPARE_PROGRAM" "$in_file" > "$out_file" 2>/dev/null
+    awk -v start="$start_idx" "$_SL_SUB_PREPARE_PROGRAM" "$in_file" > "$out_file" 2>/dev/null
 }
 
 # Apply a user exclusion filter to prepared rows (single awk pass).
@@ -761,6 +755,142 @@ sl_sub_apply_user_filter_file() {
             else print $0 >> active
         }
     ' "$in_file"
+}
+
+# Drop an `fp` query parameter whose value sing-box does not know (a known
+# value is lowercased instead). Podkop re-reads `fp` from the URL when it
+# builds TLS settings, so an unknown value (e.g. Xray's "unsafe") makes the
+# whole generated config invalid; dropping it means "no uTLS emulation",
+# which is also what decode-link does with unknown fingerprints.
+# Args: <url>; echoes the repaired URL.
+sl_sub_repair_utls_fp() {
+    local url="$1" base fragment prefix query tok key key_lc val val_lc new_query f known
+    case "$url" in
+        *fp=*) ;;
+        *) printf '%s' "$url"; return 0 ;;
+    esac
+
+    case "$url" in
+        *\#*) base="${url%%#*}"; fragment="#${url#*#}" ;;
+        *) base="$url"; fragment="" ;;
+    esac
+    case "$base" in
+        *\?*) prefix="${base%%\?*}"; query="${base#*\?}" ;;
+        *) printf '%s' "$url"; return 0 ;;
+    esac
+
+    new_query=""
+    while IFS= read -r tok || [ -n "$tok" ]; do
+        [ -n "$tok" ] || continue
+        key="${tok%%=*}"
+        key_lc="$key"
+        case "$key" in *[A-Z]*) key_lc="$(printf '%s' "$key" | tr 'A-Z' 'a-z')" ;; esac
+        if [ "$key_lc" = "fp" ]; then
+            val=""
+            case "$tok" in *=*) val="${tok#*=}" ;; esac
+            val_lc="$val"
+            case "$val" in *[A-Z]*) val_lc="$(printf '%s' "$val" | tr 'A-Z' 'a-z')" ;; esac
+            if [ -n "$val_lc" ]; then
+                known=0
+                for f in $SL_UTLS_FINGERPRINTS; do
+                    [ "$f" = "$val_lc" ] && { known=1; break; }
+                done
+                [ "$known" -eq 0 ] && continue
+                tok="fp=$val_lc"
+            fi
+        fi
+        new_query="${new_query:+$new_query&}$tok"
+    done <<EOF
+$(printf '%s' "$query" | tr '&' '\n')
+EOF
+
+    if [ -n "$new_query" ]; then
+        printf '%s?%s%s' "$prefix" "$new_query" "$fragment"
+    else
+        printf '%s%s' "$prefix" "$fragment"
+    fi
+}
+
+# Publish gate: keep only links the installed engine can actually use.
+# With tools.decode-link every row is probed by the engine itself (same code
+# as `sing-box check`), which catches unsupported transports, encryption
+# schemes and future protocols no static check knows about. Without the
+# feature, rows fall back to the static transport/encryption checks so a
+# cache written by an older engine cannot crash Podkop either.
+# Args: <in_file> <out_file> <skipped_file>
+# Skipped rows: "<url>\t<title>\t<reason>".
+sl_sub_engine_gate() {
+    local in_file="$1" out_file="$2" skipped_file="$3"
+    : > "$out_file"
+    : > "$skipped_file"
+    [ -s "$in_file" ] || return 0
+
+    local tmp_dir="${out_file}.probe.$$"
+    rm -rf "$tmp_dir"; mkdir -p "$tmp_dir"
+
+    # Repair rows first (one pass) so probing, keys and output all agree.
+    local url title host src repaired
+    local work_file="$tmp_dir/input"
+    : > "$work_file"
+    while IFS="$TAB" read -r url title host src || [ -n "$url" ]; do
+        [ -n "$url" ] || continue
+        repaired="$(sl_sub_repair_utls_fp "$url")"
+        if [ "$repaired" != "$url" ]; then
+            log "Repaired '$title': dropped unsupported uTLS fingerprint" "debug"
+            url="$repaired"
+        fi
+        printf '%s\t%s\t%s\t%s\n' "$url" "$title" "$host" "$src" >> "$work_file"
+    done < "$in_file"
+
+    if ! sl_engine_has_feature "tools.decode-link"; then
+        while IFS="$TAB" read -r url title host src || [ -n "$url" ]; do
+            [ -n "$url" ] || continue
+            if ! sl_sub_transport_supported "$(sl_sub_extract_transport "$url")"; then
+                printf '%s\t%s\t%s\n' "$url" "$title" "unsupported transport" >> "$skipped_file"
+                continue
+            fi
+            if ! sl_sub_vless_encryption_ok "$url"; then
+                printf '%s\t%s\t%s\n' "$url" "$title" "unsupported encryption" >> "$skipped_file"
+                continue
+            fi
+            printf '%s\t%s\t%s\t%s\n' "$url" "$title" "$host" "$src" >> "$out_file"
+        done < "$work_file"
+        rm -rf "$tmp_dir"
+        return 0
+    fi
+
+    local count=0 pids="" key
+    while IFS="$TAB" read -r url title host src || [ -n "$url" ]; do
+        [ -n "$url" ] || continue
+        key="$(sl_text_key "$url")"
+        (
+            if sl_engine_probe_link "$url" "$tmp_dir/${key}.err"; then
+                printf '%s\t%s\t%s\t%s\n' "$url" "$title" "$host" "$src" > "$tmp_dir/${key}.row"
+            fi
+        ) &
+        pids="$pids $!"
+        count=$((count + 1))
+        if [ "$count" -ge "$SL_PROBE_BATCH" ]; then
+            _sl_sub_wait_wave "$pids" "$SL_PROBE_TIMEOUT"
+            pids=""; count=0
+        fi
+    done < "$work_file"
+    [ -n "$pids" ] && _sl_sub_wait_wave "$pids" "$SL_PROBE_TIMEOUT"
+
+    local reason
+    while IFS="$TAB" read -r url title host src || [ -n "$url" ]; do
+        [ -n "$url" ] || continue
+        key="$(sl_text_key "$url")"
+        if [ -s "$tmp_dir/${key}.row" ]; then
+            cat "$tmp_dir/${key}.row" >> "$out_file"
+        else
+            reason="$(head -n 1 "$tmp_dir/${key}.err" 2>/dev/null)"
+            [ -n "$reason" ] || reason="engine rejected the link"
+            printf '%s\t%s\t%s\n' "$url" "$title" "$reason" >> "$skipped_file"
+        fi
+    done < "$work_file"
+    rm -rf "$tmp_dir"
+    return 0
 }
 
 # Fetch a single subscription URL and append parsed lines to out_file.
@@ -802,30 +932,24 @@ sl_sub_fetch_one() {
     fi
     rm -f "$norm_file"
 
-    # Pass 1: normalize + scheme/transport filtering (single awk pass, no DNS).
+    # Pass 1: normalize + scheme filtering (single awk pass, no DNS).
     local prepared_file="${out_file}.prepared.$$"
     local hosts_file="${out_file}.hosts.$$"
-    local skip_file="${out_file}.skip.$$"
-    if ! _sl_sub_prepare_stream "$dec_file" "$prepared_file" "$skip_file" "$idx"; then
+    if ! _sl_sub_prepare_stream "$dec_file" "$prepared_file" "$idx"; then
         # A parser failure must not look like an empty subscription: report a
         # fetch failure so callers keep using the previous cache.
         log "Failed to parse subscription content: $sub_url" "warn"
-        rm -f "$raw_file" "$dec_file" "$prepared_file" "$hosts_file" "$skip_file"
+        rm -f "$raw_file" "$dec_file" "$prepared_file" "$hosts_file"
         return 1
     fi
-    local prepared_count input_count
+    local prepared_count
     prepared_count="$(wc -l < "$prepared_file" 2>/dev/null || echo 0)"
     case "$prepared_count" in *[!0-9]*) prepared_count=0 ;; esac
     idx=$((idx + prepared_count))
-    input_count="$(grep -c . "$dec_file" 2>/dev/null || echo 0)"
-    case "$input_count" in *[!0-9]*) input_count=0 ;; esac
-    local appended=0 skipped=$((input_count - prepared_count))
-    [ "$skipped" -lt 0 ] && skipped=0
-    local reason
-    while IFS= read -r reason; do
-        [ -n "$reason" ] && log "$reason" "debug"
-    done < "$skip_file"
-    rm -f "$skip_file"
+    # Candidate links in the source content (for the per-source counters).
+    SL_SUB_FETCH_TOTAL="$(grep -c '://' "$dec_file" 2>/dev/null || echo 0)"
+    case "$SL_SUB_FETCH_TOTAL" in *[!0-9]*) SL_SUB_FETCH_TOTAL=0 ;; esac
+    local appended=0 skipped=0
 
     # Resolve all unique hosts in parallel batches before the per-link checks.
     cut -f3 "$prepared_file" 2>/dev/null | grep -v '^$' | sort -u > "$hosts_file"
@@ -845,8 +969,8 @@ sl_sub_fetch_one() {
     done < "$prepared_file"
     rm -f "$prepared_file" "$hosts_file"
 
-    [ "$skipped" -gt 0 ] && log "Filtered $skipped server(s) from subscription" "debug"
-    rm -f "$raw_file" "$dec_file" "$norm_file"
+    [ "$skipped" -gt 0 ] && log "Skipped $skipped server(s) with unresolvable hosts" "debug"
+    rm -f "$raw_file" "$dec_file"
     [ "$appended" -eq 1 ] && return 0
     return 2
 }
@@ -875,6 +999,24 @@ sl_sub_get_time() {
     echo "${ts:-0}"
 }
 
+# Last fetched candidate count for a source (keyed by hash).
+_sl_sub_total_get() {
+    local key="$1" t
+    [ -s "$STATE_SOURCE_TOTALS" ] || { echo 0; return; }
+    t="$(awk -F "$TAB" -v k="$key" '$1==k{print $2; exit}' "$STATE_SOURCE_TOTALS" 2>/dev/null)"
+    sl_safe_num "$t"
+}
+
+_sl_sub_total_set() {
+    local key="$1" total="$2" tmp="${STATE_SOURCE_TOTALS}.$$"
+    : > "$tmp" || return 0
+    if [ -s "$STATE_SOURCE_TOTALS" ]; then
+        grep -v "^${key}${TAB}" "$STATE_SOURCE_TOTALS" > "$tmp" 2>/dev/null || :
+    fi
+    printf '%s\t%s\n' "$key" "$total" >> "$tmp"
+    mv "$tmp" "$STATE_SOURCE_TOTALS"
+}
+
 # Rebuild links from caches + fetch only sources without cache.
 # Args: <out_file> [changed_hashes_comma_separated]
 # Sets: SL_FETCH_COUNT, SL_FETCH_OK.
@@ -894,6 +1036,10 @@ sl_sub_rebuild() {
 
     local idx=1 any_src=0 src_idx=0 hard_fail=0
     mkdir -p "$STATE_SUB_CACHE"
+
+    # Per-source counters for this rebuild: "<src_idx>\t<source_url>\t<total>".
+    local idx_meta="${STATE_DIR}/idx_meta.$$"
+    : > "$idx_meta"
 
     local line src_type need_fetch url_hash cache_file exclude_filter
     while IFS= read -r line; do
@@ -924,6 +1070,7 @@ sl_sub_rebuild() {
                 any_src=1
             fi
             rm -f "$manual_tmp"
+            printf '%s\t%s\t%s\n' "$src_idx" "$line" 1 >> "$idx_meta"
             sl_sub_mark_time "$url_hash"
         else
             if [ "$need_fetch" = "1" ] || [ ! -s "$cache_file" ]; then
@@ -936,11 +1083,14 @@ sl_sub_rebuild() {
                     sl_sub_apply_user_filter_file "$src_tmp" "$work" "$excluded_work" "$exclude_filter"
                     cut -f1-3 "$src_tmp" > "${cache_file}.new" 2>/dev/null
                     mv "${cache_file}.new" "$cache_file" 2>/dev/null
+                    _sl_sub_total_set "$url_hash" "${SL_SUB_FETCH_TOTAL:-0}"
+                    printf '%s\t%s\t%s\n' "$src_idx" "$line" "${SL_SUB_FETCH_TOTAL:-0}" >> "$idx_meta"
                     any_src=1
                     sl_sub_mark_time "$url_hash"
                 elif [ "$fetch_rc" -eq 2 ]; then
                     log "Subscription has no usable servers, clearing cache for: $line" "warn"
                     rm -f "$cache_file" "${cache_file}.new" 2>/dev/null
+                    printf '%s\t%s\t%s\n' "$src_idx" "$line" "${SL_SUB_FETCH_TOTAL:-0}" >> "$idx_meta"
                     sl_sub_mark_time "$url_hash"
                 elif [ -s "$cache_file" ]; then
                     log "Sub fetch failed, using cache for: $line" "warn"
@@ -948,6 +1098,7 @@ sl_sub_rebuild() {
                     awk -v si="$src_idx" -F "$TAB" '{print $1"\t"$2"\t"$3"\t"si}' "$cache_file" > "$cache_tmp"
                     sl_sub_apply_user_filter_file "$cache_tmp" "$work" "$excluded_work" "$exclude_filter"
                     rm -f "$cache_tmp"
+                    printf '%s\t%s\t%s\n' "$src_idx" "$line" "$(_sl_sub_total_get "$url_hash")" >> "$idx_meta"
                     any_src=1
                 else
                     log "Sub fetch failed and no cache: $line" "warn"
@@ -963,6 +1114,7 @@ sl_sub_rebuild() {
                 awk -v si="$src_idx" -F "$TAB" '{print $1"\t"$2"\t"$3"\t"si}' "$cache_file" > "$cache_tmp"
                 sl_sub_apply_user_filter_file "$cache_tmp" "$work" "$excluded_work" "$exclude_filter"
                 rm -f "$cache_tmp"
+                printf '%s\t%s\t%s\n' "$src_idx" "$line" "$(_sl_sub_total_get "$url_hash")" >> "$idx_meta"
                 any_src=1
             fi
             idx=$((idx + 10000))
@@ -972,12 +1124,32 @@ sl_sub_rebuild() {
 $sources
 EOF
 
-    [ "$hard_fail" -eq 1 ] && { SL_FETCH_OK=0; SL_FETCH_COUNT=0; SL_EXCLUDED_COUNT=0; SL_FETCH_EMPTY_ACTIVE=0; rm -f "$work" "$excluded_work" "$resolve_cache"; return 1; }
-    [ "$any_src" -ne 1 ] && { SL_FETCH_OK=0; SL_FETCH_COUNT=0; SL_EXCLUDED_COUNT=0; SL_FETCH_EMPTY_ACTIVE=0; rm -f "$work" "$excluded_work" "$resolve_cache"; return 1; }
+    [ "$hard_fail" -eq 1 ] && { SL_FETCH_OK=0; SL_FETCH_COUNT=0; SL_EXCLUDED_COUNT=0; SL_FETCH_EMPTY_ACTIVE=0; rm -f "$work" "$excluded_work" "$resolve_cache" "$idx_meta"; return 1; }
+    [ "$any_src" -ne 1 ] && { SL_FETCH_OK=0; SL_FETCH_COUNT=0; SL_EXCLUDED_COUNT=0; SL_FETCH_EMPTY_ACTIVE=0; rm -f "$work" "$excluded_work" "$resolve_cache" "$idx_meta"; return 1; }
 
-    awk -F "$TAB" '!seen[$1]++' "$work" > "$out_file"
+    # Dedupe active rows first (unique links are also probed once), then let
+    # the installed engine veto links it cannot use.
+    awk -F "$TAB" '!seen[$1]++' "$work" > "${work}.uniq"
+    sl_sub_engine_gate "${work}.uniq" "$out_file" "${work}.gate_skipped"
+    local gate_skipped_count=0
+    while IFS="$TAB" read -r g_url g_title g_reason || [ -n "$g_url" ]; do
+        [ -n "$g_url" ] || continue
+        gate_skipped_count=$((gate_skipped_count + 1))
+        log "Engine rejected '$g_title': $g_reason" "debug"
+    done < "${work}.gate_skipped"
+    [ "$gate_skipped_count" -gt 0 ] && log "Filtered $gate_skipped_count link(s) unusable by the engine" "debug"
+
     awk -F "$TAB" '!seen[$1 FS $4]++' "$excluded_work" > "${out_file}.excluded"
-    rm -f "$work" "$excluded_work" "$resolve_cache"
+
+    # Per-source counters: candidate links from the last fetch, by URL.
+    local stats_tmp="${STATE_SOURCE_STATS}.$$" m_idx m_url m_total
+    : > "$stats_tmp"
+    while IFS="$TAB" read -r m_idx m_url m_total || [ -n "$m_idx" ]; do
+        [ -n "$m_url" ] || continue
+        printf '%s\t%s\n' "$m_url" "$(sl_safe_num "$m_total")" >> "$stats_tmp"
+    done < "$idx_meta"
+    mv "$stats_tmp" "$STATE_SOURCE_STATS" 2>/dev/null
+    rm -f "$work" "${work}.uniq" "${work}.gate_skipped" "$excluded_work" "$resolve_cache" "$idx_meta"
     SL_FETCH_COUNT="$(wc -l < "$out_file" 2>/dev/null || echo 0)"
     SL_EXCLUDED_COUNT="$(wc -l < "${out_file}.excluded" 2>/dev/null || echo 0)"
     if [ "$(sl_safe_num "$SL_FETCH_COUNT")" -le 0 ]; then

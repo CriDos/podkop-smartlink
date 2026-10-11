@@ -33,21 +33,38 @@ sl_clash_redetect() {
     sl_clash_detect
 }
 
-# True when the installed sing-box reports "tools.decode-link" in the
-# "Features:" line of `sing-box version` (podkop-engine r11+). Podkop decodes
-# xhttp links via `sing-box tools decode-link` and fatally aborts config
-# generation when the feature is missing (leaving sing-box stopped), so
-# SmartLink must not publish xhttp links to such engines. Cached per process.
-sl_engine_has_xhttp() {
-    [ "$_SL_ENGINE_XHTTP" = "1" ] && return 0
-    [ "$_SL_ENGINE_XHTTP" = "0" ] && return 1
-    local features
-    features="$(sing-box version 2>/dev/null | sed -n 's/^Features:[[:space:]]*//p')"
-    case ",$features," in
-        *",tools.decode-link,"*) _SL_ENGINE_XHTTP=1; return 0 ;;
+# Engine capabilities --------------------------------------------------------
+# The installed sing-box reports what it can do: podkop-engine (r11+) prints
+# a "Features:" line in `sing-box version`, and `sing-box tools decode-link`
+# builds an outbound for a link with the same code as `sing-box check`.
+# SmartLink uses both: feature gates for options, decode-link as the exact
+# per-link oracle (it catches everything Podkop would reject fatally,
+# including future protocols no static parser knows about).
+
+# The "Features:" line of `sing-box version`, comma-separated; empty for
+# builds without it (cached per process).
+sl_engine_features() {
+    if [ -z "$_SL_ENGINE_FEATURES_LOADED" ]; then
+        _SL_ENGINE_FEATURES_LOADED=1
+        _SL_ENGINE_FEATURES="$(sing-box version 2>/dev/null | sed -n 's/^Features:[[:space:]]*//p')"
+    fi
+    printf '%s' "$_SL_ENGINE_FEATURES"
+}
+
+# True when the installed engine reports the given feature.
+sl_engine_has_feature() {
+    case ",$(sl_engine_features)," in
+        *",$1,"*) return 0 ;;
     esac
-    _SL_ENGINE_XHTTP=0
     return 1
+}
+
+# Probe a link with `sing-box tools decode-link`. A successful decode means
+# this exact link is usable by the installed engine; otherwise the engine's
+# first error line is written to <err_file>.
+# Args: <url> <err_file>
+sl_engine_probe_link() {
+    sing-box tools decode-link "$1" >/dev/null 2>"$2"
 }
 
 # Internal: curl with auth, returns body + http code on last line.
@@ -55,22 +72,14 @@ _sl_clash_curl() {
     local method="$1" path="$2" data="$3"
     local url="http://${_CLASH_BASE}${path}"
 
+    set -- -s -w "\n%{http_code}" --max-time 10
+    [ -n "$_CLASH_AUTH" ] && set -- "$@" --header "$_CLASH_AUTH"
     if [ "$method" = "GET" ]; then
-        if [ -n "$_CLASH_AUTH" ]; then
-            curl -s -w "\n%{http_code}" --max-time 10 --header "$_CLASH_AUTH" "$url"
-        else
-            curl -s -w "\n%{http_code}" --max-time 10 "$url"
-        fi
+        set -- "$@" "$url"
     else
-        if [ -n "$_CLASH_AUTH" ]; then
-            curl -s -w "\n%{http_code}" --max-time 10 -X "$method" \
-                --header "$_CLASH_AUTH" \
-                -H "Content-Type: application/json" --data-raw "$data" "$url"
-        else
-            curl -s -w "\n%{http_code}" --max-time 10 -X "$method" \
-                -H "Content-Type: application/json" --data-raw "$data" "$url"
-        fi
+        set -- "$@" -X "$method" -H "Content-Type: application/json" --data-raw "$data" "$url"
     fi
+    curl "$@"
 }
 
 # Wait for Clash API to become reachable after a podkop reload.
@@ -127,18 +136,13 @@ sl_clash_proxy_latency() {
     local curl_max=$(( timeout / 1000 + 5 ))
     [ "$curl_max" -lt 10 ] && curl_max=10
 
-    local resp code delay enc_tag
+    local resp code delay enc_tag test_url
     enc_tag="$(sl_uri_encode "$tag")"
-    if [ -n "$_CLASH_AUTH" ]; then
-        resp="$(curl -s -w "\n%{http_code}" --max-time "$curl_max" -G "http://${_CLASH_BASE}/proxies/${enc_tag}/delay" \
-            --header "$_CLASH_AUTH" \
-            --data-urlencode "url=${SL_CFG_TEST_URL:-$DEFAULT_TEST_URL}" \
-            --data-urlencode "timeout=${timeout}" 2>/dev/null)"
-    else
-        resp="$(curl -s -w "\n%{http_code}" --max-time "$curl_max" -G "http://${_CLASH_BASE}/proxies/${enc_tag}/delay" \
-            --data-urlencode "url=${SL_CFG_TEST_URL:-$DEFAULT_TEST_URL}" \
-            --data-urlencode "timeout=${timeout}" 2>/dev/null)"
-    fi
+    test_url="${SL_CFG_TEST_URL:-$DEFAULT_TEST_URL}"
+    set -- -s -w "\n%{http_code}" --max-time "$curl_max" -G "http://${_CLASH_BASE}/proxies/${enc_tag}/delay" \
+        --data-urlencode "url=${test_url}" --data-urlencode "timeout=${timeout}"
+    [ -n "$_CLASH_AUTH" ] && set -- "$@" --header "$_CLASH_AUTH"
+    resp="$(curl "$@" 2>/dev/null)"
     code="$(printf '%s' "$resp" | tail -n1)"
     [ "$code" != "200" ] && return 1
 
@@ -199,8 +203,6 @@ _sl_clash_ping_collect() {
 # Args: <out_file> <timeout_ms> <tags_file>
 # File format: "<latency_or_empty>\t<tag>" per line (alive sorted by latency, dead after).
 # Sets: SL_ALIVE_COUNT
-SL_PING_BATCH=20
-
 sl_clash_ping_tags_file() {
     local out_file="$1" timeout="$2" tags_file="$3"
     [ -s "$tags_file" ] || { SL_ALIVE_COUNT=0; : > "$out_file"; return 1; }
@@ -221,16 +223,10 @@ sl_clash_ping_tags_file() {
         enc_tag="$(sl_uri_encode "$tag")"
         (
             local resp code delay
-            if [ -n "$_CLASH_AUTH" ]; then
-                resp="$(curl -s -w "\n%{http_code}" --max-time "$curl_max" -G "http://${_CLASH_BASE}/proxies/${enc_tag}/delay" \
-                    --header "$_CLASH_AUTH" \
-                    --data-urlencode "url=${test_url}" \
-                    --data-urlencode "timeout=${timeout}" 2>/dev/null)"
-            else
-                resp="$(curl -s -w "\n%{http_code}" --max-time "$curl_max" -G "http://${_CLASH_BASE}/proxies/${enc_tag}/delay" \
-                    --data-urlencode "url=${test_url}" \
-                    --data-urlencode "timeout=${timeout}" 2>/dev/null)"
-            fi
+            set -- -s -w "\n%{http_code}" --max-time "$curl_max" -G "http://${_CLASH_BASE}/proxies/${enc_tag}/delay" \
+                --data-urlencode "url=${test_url}" --data-urlencode "timeout=${timeout}"
+            [ -n "$_CLASH_AUTH" ] && set -- "$@" --header "$_CLASH_AUTH"
+            resp="$(curl "$@" 2>/dev/null)"
             code="$(printf '%s' "$resp" | tail -n1)"
             if [ "$code" = "200" ]; then
                 delay="$(printf '%s' "$resp" | sed '$d' | jq -r '.delay // empty' 2>/dev/null)"
@@ -253,50 +249,16 @@ sl_clash_ping_tags_file() {
     return 0
 }
 
-sl_clash_ping_tags() {
-    local out_file="$1" timeout="$2" tags_file="${out_file}.tags.$$"
-    shift 2
-    : > "$tags_file"
-    local tag
-    for tag in "$@"; do
-        [ -n "$tag" ] && printf '%s\n' "$tag" >> "$tags_file"
-    done
-    sl_clash_ping_tags_file "$out_file" "$timeout" "$tags_file"
-    local rc=$?
-    rm -f "$tags_file"
-    return $rc
-}
-
 # Ping all outbounds in a group.
-# Args: <group_tag> <out_file> [timeout_ms] [sequential:0|1]
-# Sequential mode (1) pings one-by-one for accurate stability stats.
+# Args: <group_tag> <out_file> [timeout_ms]
 sl_clash_ping_group() {
-    local group_tag="$1" out_file="$2" timeout="${3:-$DEFAULT_PING_TIMEOUT}" sequential="${4:-0}"
+    local group_tag="$1" out_file="$2" timeout="${3:-$DEFAULT_PING_TIMEOUT}"
     : > "$out_file"
 
     local tags_file="${out_file}.tags.$$"
     sl_clash_get_outbound_tags "$group_tag" > "$tags_file" 2>/dev/null
     [ -s "$tags_file" ] || { SL_ALIVE_COUNT=0; rm -f "$tags_file"; return 1; }
 
-    if [ "$sequential" = "1" ]; then
-        local tmp_dir="${out_file}.seq"
-        rm -rf "$tmp_dir"; mkdir -p "$tmp_dir"
-        local tag lat key
-        while IFS= read -r tag || [ -n "$tag" ]; do
-            [ -z "$tag" ] && continue
-            key="$(sl_text_key "$tag")"
-            lat="$(sl_clash_proxy_latency "$tag" "$timeout")"
-            if [ -n "$lat" ]; then
-                printf '%s' "$lat" > "$tmp_dir/${key}.lat"
-            fi
-        done < "$tags_file"
-        _sl_clash_ping_collect "$out_file" "$tmp_dir" "$tags_file"
-        rm -rf "$tmp_dir"
-        rm -f "$tags_file"
-        return 0
-    fi
-
-    # Parallel mode
     sl_clash_ping_tags_file "$out_file" "$timeout" "$tags_file"
     local rc=$?
     rm -f "$tags_file"

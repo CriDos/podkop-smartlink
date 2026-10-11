@@ -20,6 +20,11 @@ STATE_STATUS="$STATE_DIR/status.json"
 STATE_LAST_UPDATE="$STATE_DIR/last_update"
 STATE_LAST_PING="$STATE_DIR/last_ping"
 STATE_SOURCE_TIMES="$STATE_DIR/source_times"
+# Per-source server counters: "<url>\t<total>" (rewritten on every rebuild;
+# consumes the totals below).
+STATE_SOURCE_STATS="$STATE_DIR/source_stats"
+# Last fetched candidate count per source hash: "<hash>\t<total>".
+STATE_SOURCE_TOTALS="$STATE_DIR/source_totals"
 STATE_PID="/var/run/podkop-smartlink.pid"
 STATE_SUB_CACHE="$STATE_DIR/sub_cache"
 STATE_SYNC_LOCK="$STATE_DIR/sync.lock"
@@ -34,6 +39,15 @@ CLASH_API_PORT=9090
 CLASH_API_READY_MAX_WAIT=90
 CLASH_API_READY_POLL=1
 
+# Import probes: parallel waves with a per-wave watchdog timeout (seconds)
+SL_RESOLVE_BATCH=10
+SL_RESOLVE_TIMEOUT=5
+SL_PROBE_BATCH=10
+SL_PROBE_TIMEOUT=5
+
+# Clash API delay tests per ping wave
+SL_PING_BATCH=20
+
 # Defaults
 DEFAULT_UPDATE_INTERVAL="24h"
 DEFAULT_CHECK_INTERVAL=10
@@ -47,5 +61,11 @@ DEFAULT_USE_PRIORITY=0
 # History sample cap (for stability calc, kept per URL)
 HISTORY_MAX_SAMPLES=100
 
-# Transports supported by standard sing-box (without extended build)
+# Transports accepted by the static fallback of the publish gate (standard
+# sing-box without tools.decode-link).
 SUPPORTED_TRANSPORTS="tcp raw ws grpc http"
+
+# uTLS fingerprints sing-box accepts. Podkop merges `fp` from the link into
+# the outbound verbatim, so an unknown value (e.g. Xray's "unsafe") makes the
+# generated config invalid; the gate drops such values.
+SL_UTLS_FINGERPRINTS="chrome firefox edge safari 360 qq ios android random randomized"

@@ -14,6 +14,7 @@ var I18N = {
     general: "Основные",
     tabSources: "Подписки",
     tabLog: "Лог",
+    serverCountHint: "работают / всего",
     updateInterval: "Обновление подписок",
     updateIntervalDesc: "Как часто скачивать подписки и обновлять список серверов.",
     usePriority: "Учитывать порядок подписок",
@@ -105,6 +106,7 @@ var I18N = {
     general: "General",
     tabSources: "Subscriptions",
     tabLog: "Log",
+    serverCountHint: "working / total",
     updateInterval: "Subscription update",
     updateIntervalDesc: "How often to reread subscriptions and update the server list.",
     usePriority: "Respect subscription order",
@@ -380,6 +382,7 @@ var state = {
   proxies: [],
   current: null,
   lastUpdate: 0,
+  sourceStats: [],
   expanded: {},
   sortKey: {},
   sortDir: {},
@@ -413,6 +416,14 @@ function sourceRuntimeIndex(src, fallback) {
   return typeof src.backendIndex === "number" ? src.backendIndex : fallback;
 }
 
+function sourceStatsFor(src) {
+  if (!src || !state.sourceStats || !state.sourceStats.length) return null;
+  for (var i = 0; i < state.sourceStats.length; i++) {
+    if (state.sourceStats[i].url === src.url) return state.sourceStats[i];
+  }
+  return null;
+}
+
 function markSourcesDirty(keepOpen) {
   state.dirty = true;
   if (keepOpen) return;
@@ -443,6 +454,7 @@ function loadStatus() {
     state.proxies = st.proxies || [];
     state.current = st.current || null;
     state.lastUpdate = st.last_update || 0;
+    state.sourceStats = st.source_stats || [];
     if (state.activeTab === "sources" && sourcesContainer && !state.dirty) renderSources();
   });
 }
@@ -456,6 +468,7 @@ function loadAll() {
     state.proxies = (st && st.proxies) || [];
     state.current = (st && st.current) || null;
     state.lastUpdate = (st && st.last_update) || 0;
+    state.sourceStats = (st && st.source_stats) || [];
     if (sourcesContainer) renderSources();
   });
 }
@@ -891,11 +904,15 @@ function renderSourceRow(src, i, sourceIndex) {
   });
   row.appendChild(urlEl);
 
-  // Server count: healthy/total (only after proxies are loaded)
+  // Server counters: alive / total candidates (only after proxies are loaded).
+  // "Total" is the candidate count from the last fetch; before the first
+  // rebuild writes it, fall back to the supported link count.
   if (srcProxies.length) {
+    var srcStats = sourceStatsFor(src);
+    var totalCount = (srcStats && srcStats.total > 0) ? srcStats.total : activeCount;
     var aliveSpan = el("span", { class: aliveCount > 0 ? "sl-ok" : "sl-bad" }, [String(aliveCount)]);
-    var countSpan = el("span", { class: "sl-server-count" }, [
-      aliveSpan, "/", el("span", {}, [String(activeCount)]),
+    var countSpan = el("span", { class: "sl-server-count", title: t("serverCountHint") }, [
+      aliveSpan, "/", el("span", {}, [String(totalCount)]),
     ]);
     row.appendChild(countSpan);
   }
@@ -1670,6 +1687,7 @@ var SmartlinkView = view.extend({
     state.proxies = (data && data.status && data.status.proxies) || [];
     state.current = (data && data.status && data.status.current) || null;
     state.lastUpdate = (data && data.status && data.status.last_update) || 0;
+    state.sourceStats = (data && data.status && data.status.source_stats) || [];
 
     // Settings form — options in fixed order, grouped after render
     var m = new form.Map("podkop-smartlink");

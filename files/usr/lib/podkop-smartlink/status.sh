@@ -259,6 +259,15 @@ sl_status_build() {
     local refresh_result
     refresh_result="$(sl_refresh_result_get)"
 
+    # Per-source candidate counters written by the last rebuild.
+    local srcstats_json="[]"
+    if [ -s "$STATE_SOURCE_STATS" ]; then
+        srcstats_json="$(jq -R -s '
+            split("\n") | map(select(length > 0)) |
+            map(split("\t") | {url: .[0], total: (.[1] | tonumber)})
+        ' "$STATE_SOURCE_STATS" 2>/dev/null)" || srcstats_json="[]"
+    fi
+
     jq -n -c \
         --arg mode "auto" \
         --arg target "$target" --arg group "$group_tag" --argjson current "$cur_obj" \
@@ -266,10 +275,12 @@ sl_status_build() {
         --argjson last_update "$(sl_safe_num "$(sl_last_update)")" \
         --argjson refreshing "$refreshing" \
         --argjson refresh_result "$refresh_result" \
+        --argjson srcstats "$srcstats_json" \
         '{mode:$mode,target_section:$target,group_tag:$group,
           current:$current,proxies:$proxies,now:$now,next_update:$next,
           last_update:$last_update,refreshing:$refreshing,
-          refresh_result:$refresh_result}' > "${STATE_STATUS}.$$"
+          refresh_result:$refresh_result,
+          source_stats:$srcstats}' > "${STATE_STATUS}.$$"
 
     mv "${STATE_STATUS}.$$" "$STATE_STATUS"
     cat "$STATE_STATUS"

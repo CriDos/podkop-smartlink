@@ -234,8 +234,8 @@ sl_sel_stats_ping() {
     local group_tag="$1" links_file="$2"
     local ping_file="${STATE_DIR}/ping.stats.$$"
 
-    # Batched parallel ping (sequential was too slow through NAT)
-    if ! sl_clash_ping_group "$group_tag" "$ping_file" "$SL_CFG_PING_TIMEOUT" 0; then
+    # Batched parallel ping
+    if ! sl_clash_ping_group "$group_tag" "$ping_file" "$SL_CFG_PING_TIMEOUT"; then
         log "Stats ping: could not ping group" "debug"
         rm -f "$ping_file"
         return 1
@@ -320,10 +320,6 @@ sl_sel_current_valid() {
     [ -n "$tag" ]
 }
 
-sl_sel_podkop_urls() {
-    uci -q get "podkop.$1.selector_proxy_links" 2>/dev/null | tr ' ' '\n' | grep '://'
-}
-
 sl_sel_state_urls() {
     local file="$1"
     [ -s "$file" ] || return 1
@@ -372,33 +368,6 @@ sl_sel_sanitize_legacy_backup() {
     return 0
 }
 
-sl_sel_legacy_state_matches() {
-    local section="$1" current file urls
-    [ "$(uci -q get "podkop.$section.proxy_config_type" 2>/dev/null)" = "selector" ] || return 1
-    current="$(sl_sel_podkop_urls "$section")"
-    [ -n "$current" ] || return 1
-
-    for file in "$STATE_LINKS_FULL" "$STATE_LINKS_CACHE"; do
-        [ -s "$file" ] || continue
-        urls="$(sl_sel_state_urls "$file")"
-        [ -n "$urls" ] || continue
-        [ "$current" = "$urls" ] && return 0
-        sl_sel_urls_same_set "$current" "$urls" && return 0
-    done
-    return 1
-}
-
-sl_sel_adopt_legacy_podkop() {
-    local section="$1"
-    sl_sel_legacy_state_matches "$section" || return 1
-    uci -q delete "$SL_NAME.main.backup_proxy_config_type" 2>/dev/null
-    uci -q delete "$SL_NAME.main.backup_selector_proxy_links" 2>/dev/null
-    uci -q set "$SL_NAME.main.managed_section=$section" 2>/dev/null || return 1
-    uci -q commit "$SL_NAME" 2>/dev/null || return 1
-    log "Adopted legacy SmartLink-managed Podkop section '$section'" "info"
-    return 0
-}
-
 sl_sel_backup_podkop() {
     local section="$1"
     local managed
@@ -410,8 +379,6 @@ sl_sel_backup_podkop() {
     if [ -n "$managed" ] && [ "$managed" != "$section" ]; then
         sl_sel_restore_podkop "$managed" || return 1
     fi
-
-    sl_sel_adopt_legacy_podkop "$section" && return 0
 
     uci -q delete "$SL_NAME.main.backup_selector_proxy_links" 2>/dev/null
     uci -q set "$SL_NAME.main.managed_section=$section" 2>/dev/null

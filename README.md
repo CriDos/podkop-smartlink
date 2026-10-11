@@ -22,9 +22,7 @@ wget -O - https://raw.githubusercontent.com/CriDos/podkop-smartlink/refs/heads/m
 
 ## Расширенные протоколы (опционально)
 
-Установщик движка: [podkop-engine](https://github.com/FiyeroT/podkop-engine) — пропатченный sing-box для Podkop. Поддерживает VLESS (транспорт XHTTP, REALITY, uTLS), Trojan, Shadowsocks, Hysteria2, TUIC и SOCKS, группы Selector/URLTest (с fallbacks), Clash API и проверку ссылок через `sing-box tools decode-link`.
-
-SmartLink определяет поддержку протоколов автоматически: с podkop-engine r11+ ссылки с XHTTP-транспортом добавляются сами, на обычном sing-box они отфильтровываются.
+Установщик движка: [podkop-engine](https://github.com/FiyeroT/podkop-engine) — пропатченный sing-box для Podkop. Поддерживает VLESS (транспорт XHTTP, REALITY, uTLS), Trojan, Shadowsocks, Hysteria2, TUIC и SOCKS.
 
 ```sh
 sh <(wget -qO- https://raw.githubusercontent.com/CriDos/podkop-smartlink/refs/heads/main/_install-singbox.sh)
@@ -45,6 +43,7 @@ wget -O - https://raw.githubusercontent.com/CriDos/podkop-smartlink/refs/heads/m
 - Sticky-выбор — текущий сервер не меняется, пока пинг в норме
 - Автопереключение после N проблем подряд на здоровый сервер
 - Статистика: доступность и стабильность по каждому серверу
+- Счётчики по подписке: работают / поддерживаются / всего
 - LuCI-интерфейс с drag-and-drop приоритета, ручным выбором сервера, логом и i18n
 - Проверка доступности через VPN-туннель до настраиваемого адреса
 
